@@ -114,6 +114,7 @@ public:
     Cpu c;
     uint8_t* mem = nullptr;  // base of the reserved guest address space
     int budget = 0;          // translated code calls poll() when this runs below zero
+    uint32_t load_shift = 0; // how far the program was moved above its link addresses; messages name link addresses
 
     // Memory. Every 32-bit address lies inside the reservation; touching a page that was never committed
     // is reported by the fault handler with the guest address.

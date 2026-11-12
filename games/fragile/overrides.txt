@@ -40,3 +40,35 @@
 00070564 timer_start               # timer chip ports 40h and 43h, DOS 25h for INT 8
 000705c4 timer_stop                # timer chip ports 40h and 43h, DOS 25h for INT 8
 0007063c site:acknowledge_interrupt  # OUT 20h in the game's timer handler
+00070788 video_init                # INT 10h 0Fh and 1017h, DPMI 0100h, VESA 4F00h
+0007081c video_restore             # INT 10h mode set, DPMI 0101h
+00070861 video_mode_supported      # VESA mode list and mode information
+00070909 video_set_mode            # INT 10h and VESA 4F02h, DAC ports, retrace port 3DAh
+00070b5a video_mode_info           # VESA 4F01h through DPMI 0300h
+00070e14 video_set_bank            # VESA 4F05h bank switch through DPMI 0300h
+00070dd3 video_set_bank            # VESA window function through DPMI 0301h
+00070e42 video_get_bank            # VESA 4F05h bank query through DPMI 0300h
+00070df4 video_get_bank            # VESA window function through DPMI 0301h
+00070d21 video_screen_on           # VGA attribute controller ports 3C0h and 3DAh
+0006fac5 palette_show              # VGA DAC ports 3C8h and 3C9h
+0006f9e6 palette_start_fade        # VGA DAC ports 3C7h and 3C9h
+0006ec04 mouse_init                # INT 33h through DPMI 0300h, functions 1Bh and 0Ch
+0006ecaa mouse_shutdown            # INT 33h function 0
+0006ed74 site:mouse_clear_motion   # INT 33h function 0Bh in the mouse handler
+0006bed8 site:open_console        # DOS 3D01h on "con" in the fatal exit
+0006beed site:write_console       # DOS 40h of the fatal message
+0006bf03 site:terminate_program   # DOS 4Ch
+00091980 int386x_dpmi              # DPMI 0300h for IPX and NetBIOS, DPMI 0100h and 0101h
+000787b6 sound_digital_init_system    # HMI sosDIGIInitSystem: loads HMIDRV.386
+0007882f sound_digital_uninit_system  # HMI sosDIGIUnInitSystem
+0008248c site:dos_file_call    # movie player: DOS 42h
+000824b5 site:dos_file_call    # movie player: DOS 3Dh
+000824e3 site:dos_file_call    # movie player: DOS 3Fh
+00082526 site:dos_file_call    # movie player: DOS 3Fh
+00082cce site:dos_file_call    # movie player: DOS 3Fh
+00082cfc site:dos_file_call    # movie player: DOS 42h
+00082d82 site:dos_file_call    # movie player: DOS 3Fh
+00082daf site:dos_file_call    # movie player: DOS 42h
+00084501 site:dos_file_call    # movie player: DOS 42h
+00085c5a site:dos_file_call    # movie player: DOS 56h
+00072040 play_movie                # GDV movie player in VGA mode X

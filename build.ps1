@@ -35,7 +35,7 @@ if (-not $GameFolder -or -not (Test-Path (Join-Path $GameFolder "FRAGILE.EXE")))
 $generated = Join-Path $root "generated\fragile"
 $python = (Get-Command python -ErrorAction Stop).Source
 & $python (Join-Path $root "tools\recomp\emit32.py") (Join-Path $GameFolder "FRAGILE.EXE") $generated `
-    --overrides (Join-Path $root "games\fragile\overrides.txt")
+    --overrides (Join-Path $root "games\fragile\overrides.txt") --shift 0x400000
 if ($LASTEXITCODE -ne 0) { throw "Translating FRAGILE.EXE failed." }
 
 $build = Join-Path $root "build\fragile"
@@ -73,7 +73,7 @@ if ($stale.Count -gt 0) {
 $exe = Join-Path $build "FragileAllegiance.exe"
 $linkObjects = ($handwritten + $translated) | ForEach-Object { Join-Path $objects ($_.BaseName + ".obj") }
 $debug = if ($Configuration -eq "Debug") { @("/DEBUG") } else { @() }
-& link.exe /nologo /OUT:$exe /STACK:268435456 @debug @linkObjects advapi32.lib user32.lib shell32.lib ole32.lib
+& link.exe /nologo /OUT:$exe /SUBSYSTEM:WINDOWS /STACK:8388608 @debug @linkObjects advapi32.lib user32.lib shell32.lib ole32.lib d3d12.lib dxgi.lib d3dcompiler.lib
 if ($LASTEXITCODE -ne 0) { throw "Linking failed." }
 Copy-Item (Join-Path $generated "image.bin") (Join-Path $build "image.bin") -Force
 Write-Host "Built $exe ($($stale.Count) sources compiled)"

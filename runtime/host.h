@@ -71,9 +71,14 @@ public:
     // Calls an original interrupt handler as the processor would: flags, code selector and return address on
     // the stack, interrupts disabled until the handler's IRETD.
     void deliver_interrupt(uint32_t handler);
+    // Calls an original handler that a driver would have called far (it ends with RETF), with the registers
+    // set by the caller, and then restores every register, as a driver callback from an interrupt does.
+    void call_far_handler(uint32_t handler);
     void poll() override;
     void halt() override;
 
+    // Makes a selector whose base is a block of conventional memory, as DPMI 0100h returns one.
+    uint16_t dos_selector(uint32_t base);
     uint32_t segment_base(uint16_t selector) override;
     uint16_t object_selector(int object_index) override;
     void interrupt(uint8_t n, uint32_t next_eip) override;
@@ -85,6 +90,7 @@ private:
     uint32_t timer_handler_ = 0;
     int64_t timer_period_ = 0, timer_next_ = 0, qpc_frequency_ = 1;
     int interrupt_depth_ = 0;
+    std::map<uint16_t, uint32_t> selectors_;  // selectors made by dos_selector
     uint32_t heap_top_ = kHeapBase;
     uint32_t heap_committed_ = kHeapBase;
     std::string failure_;

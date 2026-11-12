@@ -1,7 +1,9 @@
 // Native replacement of the Watcom C start-up code of FRAGILE.EXE. The original asks DOS and the DOS/4GW
 // extender for the version, the program segment prefix, the environment and the command line. Here the same
 // library variables are filled from Windows, and then the original initialisers and main run as translated.
+#include <cstdio>
 #include <cstring>
+#include <string>
 
 #include "games/fragile/game.h"
 
@@ -75,6 +77,28 @@ void cstart(Machine& m) {
     g.call(fa::kCallMain);
     // The original main wrapper ends in exit(), which never returns.
     g.stop("The game's main function returned instead of ending the program.");
+}
+
+// Sites 0006BED8 and 0006BEED in the library's fatal exit: DOS 3D01h opens the console device "con" and DOS
+// 40h writes the message to it. The message goes to the runtime log and to the console, if there is one.
+void open_console(Machine& m) {
+    m.c.a.e = 1;
+    m.c.cf = false;
+}
+
+void write_console(Machine& m) {
+    Game& g = game(m);
+    const std::string text(reinterpret_cast<const char*>(g.mem + g.c.d.e), g.c.c.e);
+    g.log("console: %s", text.c_str());
+    std::fwrite(text.data(), 1, text.size(), stderr);
+    g.c.a.e = g.c.c.e;
+    g.c.cf = false;
+}
+
+// Site 0006BF03: DOS 4Ch ends the program with the code in AL, after the library ran its exit routines.
+void terminate_program(Machine& m) {
+    game(m).log("the game ended with code %u", m.c.a.l);
+    throw ProgramExit{int(m.c.a.l)};
 }
 
 }  // namespace nax::native

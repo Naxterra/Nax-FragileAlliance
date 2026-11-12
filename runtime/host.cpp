@@ -145,6 +145,20 @@ void Host::deliver_interrupt(uint32_t handler) {
     c.eip = eip;
 }
 
+void Host::call_far_handler(uint32_t handler) {
+    const Cpu saved = c;
+    push32(c.sel[CS]);
+    push32(kNativeReturn);
+    c.iflag = false;
+    c.eip = handler;
+    interrupt_depth_++;
+    run_until(kNativeReturn, saved.sp.e);
+    interrupt_depth_--;
+    const Fpu fpu = c.fpu;
+    c = saved;
+    c.fpu = fpu;
+}
+
 void Host::poll() {
     budget = 20000;
     if (!timer_handler_ || !c.iflag || interrupt_depth_ > 4) return;
@@ -202,7 +216,8 @@ void Host::write_string(uint32_t address, const std::string& text) {
 std::string Host::where(uint32_t address) const {
     char text[96];
     if (const Chunk* chunk = find(address))
-        std::snprintf(text, sizeof text, "the original function at %08X (address %08X)", chunk->start, address);
+        std::snprintf(text, sizeof text, "the original function at %08X (address %08X)", chunk->start - load_shift,
+                      address - load_shift);
     else
         std::snprintf(text, sizeof text, "address %08X", address);
     return text;
@@ -213,7 +228,14 @@ void Host::stop(const std::string& message) {
     throw GuestFault(message);
 }
 
+uint16_t Host::dos_selector(uint32_t base) {
+    const uint16_t selector = uint16_t(0x0100 + 8 * selectors_.size());
+    selectors_[selector] = base;
+    return selector;
+}
+
 uint32_t Host::segment_base(uint16_t selector) {
+    if (const auto it = selectors_.find(uint16_t(selector & ~3u)); it != selectors_.end()) return it->second;
     switch (selector & ~3u) {
     case 0:
     case kCodeSelector:

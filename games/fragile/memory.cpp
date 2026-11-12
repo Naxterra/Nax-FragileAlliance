@@ -35,7 +35,8 @@ void heap_new_block(Machine& m) {
 namespace nax::native {
 
 namespace {
-constexpr uint32_t kInitHeapBlock = 0x6A3D6;  // EAX block, EDX size, EBX handle, ECX where to store the result
+constexpr uint32_t kInitHeapBlock = fa::A(0x6A3D6);  // EAX block, EDX size, EBX handle, ECX where to store the result
+constexpr uint32_t kConventionalEnd = 0xA0000u;  // end of the first 640 KB
 constexpr uint32_t kLargestBlock = 48u << 20;  // what the game gets when it asks for "as much as possible"
 
 void new_game_heap(Game& g, uint32_t size, uint32_t limit) {
@@ -59,14 +60,27 @@ void lock_stack(Machine& m) { m.ret(); }
 void unlock_stack(Machine& m) { m.ret(); }
 
 // Original 0006A2FE: the game's heap in conventional memory, from DPMI 0100h. EAX is the wanted size, or a
-// negative number for as much as possible; EDX points to where the heap handle goes. The host has no
-// conventional memory limit, so the block comes from the normal heap.
+// negative number for as much as possible; EDX points to where the heap handle goes. The game keeps data at
+// fixed addresses in this heap (its "sim" heap at 60000h to 90000h), so the block really is conventional
+// memory: the part of the first 640 KB above the host's own small tables, as DOS would have handed it out.
 void game_heap_low(Machine& m) {
     Game& g = game(m);
-    const int32_t wanted = int32_t(g.c.a.e);
-    if (wanted == 0) { g.wr32(g.c.d.e, 0); g.c.a.e = 0; g.ret(); return; }
-    const uint32_t paragraphs = wanted < 0 ? 0xFFFF : std::min<uint32_t>(0xFFFF, (uint32_t(wanted) + 0x60 + 0xF) >> 4);
-    new_game_heap(g, paragraphs << 4, 0xFFFF0);
+    Cpu& c = g.c;
+    const int32_t wanted = int32_t(c.a.e);
+    const uint32_t out = c.d.e;
+    g.wr32(out, 0);
+    c.a.e = 0;
+    if (wanted != 0) {
+        const uint32_t available = (kConventionalEnd - g.conventional_next) & ~0xFu;
+        uint32_t size = wanted < 0 ? 0xFFFF0u : std::min<uint32_t>(0xFFFF0u, (uint32_t(wanted) + 0x60 + 0xF) & ~0xFu);
+        size = std::min(size, available);  // DOS hands out the largest block when the request is too big
+        if (size > 6 * 16) {
+            const uint32_t block = g.conventional_next;
+            g.conventional_next += size;
+            c.a.e = g.invoke(kInitHeapBlock, block, size, 0xFFFF0000u | (block >> 4), out);
+        }
+    }
+    g.ret();
 }
 
 // Original 0006A35A: the game's heap in extended memory, from DPMI 0500h and 0501h, with the same arguments.

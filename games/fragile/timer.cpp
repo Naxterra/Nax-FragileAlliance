@@ -6,15 +6,15 @@
 namespace nax::native {
 
 namespace {
-constexpr uint32_t kTimerHead = 0x12403C;      // head of the list of timer tasks; its fields start here
-constexpr uint32_t kDivisor = 0x124044;        // timer chip divisor for the game's rate (head + 8)
-constexpr uint32_t kTickStep = 0x124048;       // clock increment per tick (head + 0x0C)
-constexpr uint32_t kBiosCountdown = 0x12405C;  // counts down to the next call of the old handler (head + 0x20)
-constexpr uint32_t kBiosReload = 0x124058;     // divisor of the original 18.2 Hz BIOS clock (head + 0x1C)
-constexpr uint32_t kOldVector = 0x124060;      // old IRQ 0 handler, called far by the game's handler (head + 0x24)
-constexpr uint32_t kRunning = 0x12404C;
-constexpr uint32_t kGameHandler = 0x70610;
-constexpr uint32_t kIretd = 0x685FF;           // an IRETD in the original code, used as the "old handler"
+constexpr uint32_t kTimerHead = fa::A(0x12403C);      // head of the list of timer tasks; its fields start here
+constexpr uint32_t kDivisor = fa::A(0x124044);        // timer chip divisor for the game's rate (head + 8)
+constexpr uint32_t kTickStep = fa::A(0x124048);       // clock increment per tick (head + 0x0C)
+constexpr uint32_t kBiosCountdown = fa::A(0x12405C);  // counts down to the next call of the old handler (head + 0x20)
+constexpr uint32_t kBiosReload = fa::A(0x124058);     // divisor of the original 18.2 Hz BIOS clock (head + 0x1C)
+constexpr uint32_t kOldVector = fa::A(0x124060);      // old IRQ 0 handler, called far by the game's handler (head + 0x24)
+constexpr uint32_t kRunning = fa::A(0x12404C);
+constexpr uint32_t kGameHandler = fa::A(0x70610);
+constexpr uint32_t kIretd = fa::A(0x685FF);           // an IRETD in the original code, used as the "old handler"
 constexpr double kChipHz = 1193181.667;
 }  // namespace
 

@@ -396,6 +396,19 @@ class Emitter:
         if m in ("loop", "loope", "loopne"):
             extra = {"loop": "", "loope": " && c.zf", "loopne": " && !c.zf"}[m]
             return f"if (--c.c.e != 0{extra}) {{ {self.jump(here, ops[0].imm & 0xFFFFFFFF)} }}", False
+        # FF /3 and FF /5 are far indirect calls and jumps through a 48-bit pointer. Capstone names them "call" and
+        # "jmp" with a 4-byte operand, so they are recognised by the ModRM byte.
+        opcode_at = self._opcode_index(insn)
+        if (m in ("call", "jmp") and insn.bytes[opcode_at] == 0xFF and opcode_at + 1 < len(insn.bytes)
+                and ((insn.bytes[opcode_at + 1] >> 3) & 7) in (3, 5)):
+            if opsize16 or ops[0].type != x86.X86_OP_MEM:
+                raise EmitError("16-bit far pointer")
+            address = self.address(insn, ops[0])
+            load = f"const uint32_t fa = {address}; const uint32_t to = m.rd32(fa); const uint16_t ts = m.rd16(fa + 4);"
+            if m == "jmp":
+                return f"{{ {load} m.load_seg(CS, ts); c.eip = to; return; }}", True
+            return (f"{{ {load} const uint32_t sp0 = c.sp.e; m.push32(c.sel[CS]); m.push32({hexu(nxt)}); "
+                    f"m.load_seg(CS, ts); c.eip = to; m.run_until({hexu(nxt)}, sp0); }}"), False
         if m == "jmp":
             if ops[0].type == x86.X86_OP_IMM:
                 return self.jump(here, ops[0].imm & 0xFFFFFFFF), True
@@ -461,10 +474,13 @@ class Emitter:
         if bits is None:
             raise EmitError(f"string instruction {base}{suffix}")
         source = SEG_PREFIX.get(insn.prefix[1], "DS")
+        # The repeat prefix is taken from the instruction bytes. Capstone leaves it out of the name for some
+        # forms, for example F2 A5 (REPNE MOVSD), which Watcom code uses as an ordinary repeated copy.
+        repeat = next((b for b in insn.bytes[:self._opcode_index(insn)] if b in (0xF2, 0xF3)), None)
         if base in ("movs", "stos", "lods", "ins", "outs"):
-            mode = 1 if prefix else 0
+            mode = 1 if repeat or prefix else 0
         else:
-            mode = {"": 0, "rep": 1, "repe": 1, "repz": 1, "repne": 2, "repnz": 2}[prefix]
+            mode = {None: 0, 0xF3: 1, 0xF2: 2}[repeat]
         if base in ("stos", "scas", "ins"):
             return f"{base}<{bits}>(m, {mode});"
         return f"{base}<{bits}>(m, {source}, {mode});"
@@ -762,14 +778,15 @@ def main() -> int:
     parser.add_argument("output")
     parser.add_argument("--seeds")
     parser.add_argument("--overrides")
+    parser.add_argument("--shift", type=lambda v: int(v, 0), default=0)
     parser.add_argument("--files", type=int, default=16)
     args = parser.parse_args()
     with open(args.program, "rb") as f:
         source = f.read()
-    image = le.load(source)
-    found = discover32.discover(image, read_seeds(args.seeds))
+    image = le.load(source, args.shift)
+    found = discover32.discover(image, {s + args.shift for s in read_seeds(args.seeds)})
     emitter = write_program(image, found, os.path.basename(args.program), source, args.output, args.files,
-                            read_overrides(args.overrides))
+                            {a + args.shift: n for a, n in read_overrides(args.overrides).items()})
     print(f"{len(found.instructions)} instructions in {len(emitter.starts)} chunks, "
           f"{len(emitter.unsupported)} left as run-time stops")
     report = os.path.join(args.output, "unsupported.txt")

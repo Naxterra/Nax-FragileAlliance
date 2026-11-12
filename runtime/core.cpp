@@ -46,20 +46,20 @@ void Machine::run_until(uint32_t ret, uint32_t sp0) {
 
 void Machine::untranslated(uint32_t address) {
     char text[128];
-    std::snprintf(text, sizeof text, "The program reached address %08X, which was not translated.", address);
+    std::snprintf(text, sizeof text, "The program reached address %08X, which was not translated.", address - load_shift);
     throw GuestFault(text);
 }
 
 void Machine::unsupported(uint32_t address, const char* instruction) {
     char text[256];
     std::snprintf(text, sizeof text, "The program reached the instruction \"%s\" at %08X, which the translator does not support.",
-                  instruction, address);
+                  instruction, address - load_shift);
     throw GuestFault(text);
 }
 
 void Machine::divide_error(uint32_t address) {
     char text[128];
-    std::snprintf(text, sizeof text, "The program divided by zero or overflowed a division at %08X.", address);
+    std::snprintf(text, sizeof text, "The program divided by zero or overflowed a division at %08X.", address - load_shift);
     throw GuestFault(text);
 }
 

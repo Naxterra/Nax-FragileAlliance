@@ -7,12 +7,12 @@
 namespace nax::native {
 
 namespace {
-constexpr uint32_t kKeyboardInstalled = 0x11F6DA;
-constexpr uint32_t kOldKeyboardVector = 0x11F5C8;  // 6 bytes each, kept for the restore function
-constexpr uint32_t kOldPrintScreenVector = 0x11F5CE;
-constexpr uint32_t kRandomSeed = 0x11F858;
-constexpr uint32_t kWindowsVersion = 0x11F85C;
-constexpr uint32_t kDateFormat = 0x11F860, kDateSeparator = 0x11F861, kClock24 = 0x11F862, kTimeSeparator = 0x11F863;
+constexpr uint32_t kKeyboardInstalled = fa::A(0x11F6DA);
+constexpr uint32_t kOldKeyboardVector = fa::A(0x11F5C8);  // 6 bytes each, kept for the restore function
+constexpr uint32_t kOldPrintScreenVector = fa::A(0x11F5CE);
+constexpr uint32_t kRandomSeed = fa::A(0x11F858);
+constexpr uint32_t kWindowsVersion = fa::A(0x11F85C);
+constexpr uint32_t kDateFormat = fa::A(0x11F860), kDateSeparator = fa::A(0x11F861), kClock24 = fa::A(0x11F862), kTimeSeparator = fa::A(0x11F863);
 
 uint8_t locale_char(LCTYPE type, char fallback) {
     wchar_t text[8] = {};

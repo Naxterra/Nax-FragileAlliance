@@ -101,6 +101,11 @@ def main_program():
     a.b(0xBF); a.d32(DATA_BASE + 0x200)
     a.b(0xB9); a.d32(8)
     a.b(0xFC); a.b(0xF3, 0xA4)
+    # F2 A5 (REPNE MOVSD), the form Watcom uses for block copies, repeats like REP.
+    a.b(0xBE); a.d32(DATA_BASE + 0x100)
+    a.b(0xBF); a.d32(DATA_BASE + 0x210)
+    a.b(0xB9); a.d32(2)
+    a.b(0xF2, 0xA5)
     # IDIV 100 / 7.
     a.b(0xB8); a.d32(100); a.b(0x99); a.b(0xB9); a.d32(7); a.b(0xF7, 0xF9)
     a.b(0xA3); a.d32(R + 0x18); a.b(0x89, 0x15); a.d32(R + 0x1C)
@@ -138,11 +143,14 @@ def main_program():
     a.b(0xBE); a.d32(0x55); a.b(0x60); a.b(0xBE); a.d32(0); a.b(0x61); a.b(0x89, 0x35); a.d32(R + 0x50)
     a.b(0xB3, 0x80); a.b(0x0F, 0xBE, 0xC3); a.b(0xA3); a.d32(R + 0x54)
     a.b(0x0F, 0xB6, 0xC3); a.b(0xA3); a.d32(R + 0x58)
+    # A far call through a 48-bit pointer (FF /3) returns with RETF.
+    a.b(0xFF, 0x1D); a.d32(DATA_BASE + 0x500); a.b(0xA3); a.d32(R + 0x5C)
     a.b(0xC3)
 
     a.label("mul"); a.b(0x8B, 0x44, 0x24, 0x04); a.b(0x0F, 0xAF, 0x44, 0x24, 0x08); a.b(0xC2, 0x08, 0x00)
     a.label("g"); a.b(0xC7, 0x05); a.d32(R + 0x14); a.d32(0x1234); a.b(0xC3)
     a.label("h"); a.b(0x59); a.b(0xFF, 0xE1)
+    a.label("farf"); a.b(0xB8); a.d32(0x99); a.b(0xCB)
     a.label("h2"); a.b(0x83, 0xC4, 0x04); a.b(0x68); a.code_address("else"); a.b(0xC3)
     a.label("else"); a.b(0xC6, 0x05); a.d32(R + 0x44); a.b(0x02); a.b(0x68); a.code_address("h2ret"); a.b(0xC3)
     code, code_fixups = a.finish()
@@ -150,7 +158,8 @@ def main_program():
     data = bytearray(0x1000)
     data[0x100:0x108] = b"ABCDEFGH"
     struct.pack_into("<3i", data, 0x300, 3, 4, 10)
-    table_fixups = b"".join(fixup32(0x400 + 4 * i, 1, a.labels[f"case{i}"]) for i in range(3))
+    struct.pack_into("<H", data, 0x504, 0x10)
+    table_fixups = b"".join(fixup32(0x400 + 4 * i, 1, a.labels[f"case{i}"]) for i in range(3)) + fixup32(0x500, 1, a.labels["farf"])
     objects = [(CODE_BASE, CODE_FLAGS, code, len(code)), (DATA_BASE, DATA_FLAGS, bytes(data), 0x1000)]
     return bound_program(objects, {1: code_fixups, 2: table_fixups})
 
@@ -218,6 +227,9 @@ class TranslatedProgramTests(unittest.TestCase):
     def test_rep_movsb_copies_the_bytes(self):
         self.assertEqual(self.memory[0x200:0x208], b"ABCDEFGH")
 
+    def test_repne_movsd_copies_like_rep(self):
+        self.assertEqual(self.memory[0x210:0x218], b"ABCDEFGH")
+
     def test_signed_division_gives_quotient_and_remainder(self):
         self.assertEqual((self.word(0x18), self.word(0x1C)), (14, 2))
 
@@ -252,6 +264,9 @@ class TranslatedProgramTests(unittest.TestCase):
 
     def test_pushad_and_popad_restore_registers(self):
         self.assertEqual(self.word(0x50), 0x55)
+
+    def test_far_indirect_call_returns_with_retf(self):
+        self.assertEqual(self.word(0x5C), 0x99)
 
     def test_movsx_and_movzx_extend_a_byte(self):
         self.assertEqual((self.word(0x54), self.word(0x58)), (0xFFFFFF80, 0x80))

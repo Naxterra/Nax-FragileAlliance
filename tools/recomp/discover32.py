@@ -75,7 +75,7 @@ def fixup_code_targets(image: le.LeImage) -> set[int]:
 # Instructions that Watcom code never contains. A trace from an unproven entry that decodes one of them is
 # data that happens to be referenced by a fixup, not code.
 IMPLAUSIBLE = {"arpl", "bound", "aaa", "aas", "aam", "aad", "daa", "das", "salc", "into", "int1", "insb", "insw",
-               "insd", "outsb", "outsw", "outsd", "lldt", "lidt", "lgdt", "ljmp", "lcall"}
+               "insd", "lldt", "lidt", "lgdt", "ljmp", "lcall"}
 
 
 def discover(image: le.LeImage, seeds: set[int] | None = None) -> Discovery:

@@ -163,7 +163,9 @@ def _u32(data: bytes, offset: int) -> int:
     return struct.unpack_from("<I", data, offset)[0]
 
 
-def load(data: bytes) -> LeImage:
+def load(data: bytes, shift: int = 0) -> LeImage:
+    """Loads a bound program. shift moves every object up by that many bytes, as an extender that
+    loads the program elsewhere would; the fixups then produce the moved addresses."""
     app, le = find_application(data)
 
     def field32(offset: int) -> int:
@@ -212,6 +214,7 @@ def load(data: bytes) -> LeImage:
         if len(raw) != 24:
             raise LeError("the object table runs past the end of the file")
         size, base, flags, first_page, count, _ = struct.unpack("<6I", raw)
+        base += shift
         if count and (first_page < 1 or first_page + count - 1 > page_count):
             raise LeError(f"object {i + 1} refers to pages outside the page map")
         # Bytes beyond the stored pages (uninitialised data and the stack) stay zero.
