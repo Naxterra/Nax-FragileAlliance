@@ -12,7 +12,8 @@ The project is at its first stage. The game does not run yet.
 |---|---|
 | Loader for the DOS/4GW bound program (`FRAGILE.EXE`) | Done. It finds the application inside the extender, places its three objects at their base addresses and applies all internal fixups. |
 | Code discovery | First pass done. From the entry point, the fixup targets and the jump tables it reaches about 92 % of the 530 KB code object. |
-| Translation to C++ | Not started. |
+| Translation to C++ | Done for the whole program. The 156,751 discovered instructions become 2,875 C++ functions that compile with optimisation. 51 instructions, mostly privileged, BCD or 16-bit-addressing forms in places that are probably data, stop the program with a message if they are ever reached. |
+| CPU core (registers, flags, x87, the 4 GB guest address space, the dispatcher) | Done and tested with hand-assembled programs. |
 | Runtime (DOS and DPMI services, VESA graphics, timer, keyboard, mouse, sound, CD image) | Not started. |
 
 ## What the game needs from the machine
@@ -32,6 +33,7 @@ The survey of the original program shows what the runtime has to provide.
 
 - Windows 11.
 - Python 3 with the Capstone disassembler, installed with `python -m pip install capstone`.
+- Visual Studio Build Tools with the C++ workload, installed with `winget install Microsoft.VisualStudio.BuildTools`.
 - Your own copy of *Fragile Allegiance*, for example the GOG release.
 
 ## Trying the current stage
@@ -42,7 +44,13 @@ The survey tool prints what the loader and discovery find in your copy:
 python tools\recomp\survey.py "<your Fragile Allegiance folder>\FRAGILE.EXE"
 ```
 
-The tests use small synthetic programs and need no game files:
+The translator writes the C++ code, the program table and the object image to a local folder that is never committed:
+
+```powershell
+python tools\recomp\emit32.py "<your Fragile Allegiance folder>\FRAGILE.EXE" generated\fragile
+```
+
+The tests use small synthetic programs and need no game files. The tests in `tests\test_emit32.py` translate hand-assembled programs, compile them with the CPU core and run them, so they need the C++ build tools:
 
 ```powershell
 python -m unittest discover -s tests -v
@@ -52,8 +60,9 @@ python -m unittest discover -s tests -v
 
 | Folder | Content |
 |---|---|
-| `tools/recomp` | The translator: the LE loader, code discovery and the survey tool, written in Python. |
-| `tests` | Tests for the translator. |
+| `tools/recomp` | The translator: the LE loader, code discovery, the C++ generator and the survey tool, written in Python. |
+| `runtime` | The CPU core that translated code runs on: registers, flags, x87, guest memory and the dispatcher. |
+| `tests` | Tests for the translator and the CPU core. |
 
 ## License
 
