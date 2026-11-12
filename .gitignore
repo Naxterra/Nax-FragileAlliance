@@ -1,0 +1,23 @@
+# Original game files are supplied by the owner of a copy and are never committed.
+gamedata/
+*.exe
+*.EXE
+*.DAT
+*.dat
+*.386
+*.256
+*.iso
+*.cue
+*.zip
+
+# Generated translation output is derived from the original program and stays local.
+generated/
+
+# Build output.
+build/
+out/
+*.obj
+*.pdb
+*.ilk
+__pycache__/
+*.pyc
