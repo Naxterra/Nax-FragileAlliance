@@ -1,0 +1,42 @@
+# Original functions of FRAGILE.EXE that are replaced by native Windows code in games/fragile.
+# Each line holds the address of the original function and the name of its replacement in nax::native.
+
+0006bc3c cstart    # Watcom C start-up: DOS version, extender, environment and command line
+0007d3fc heap_release_empty   # Watcom heap: return empty blocks to DPMI or DOS
+0007d61f heap_new_block       # Watcom heap: new block from DPMI 0501h or DOS 48h
+000941c1 intdos               # Watcom intdos(): only the clock and date are used
+000895e9 lock_region          # DPMI 0600h: lock linear memory for interrupt handlers
+00089626 unlock_region        # DPMI 0601h: unlock linear memory
+0008948f is_device            # isatty() through DOS IOCTL 4400h
+00074d7d sopen                # _sopen(): DOS 3Ch, 3Dh, 3Eh and 40h
+0007d965 close_file           # close(): DOS 3Eh
+0007da13 read_raw             # raw read: DOS 3Fh
+00074fe8 read_file            # read() with text mode: DOS 3Fh
+00074fa7 seek_file            # lseek(): DOS 42h
+0007dfed write_file           # write() with text mode: DOS 40h and 42h
+00072df5 get_cwd              # getcwd(): DOS 47h and 19h
+00072b9c change_dir           # chdir(): DOS 3Bh
+00072b88 set_drive            # _dos_setdrive(): DOS 0Eh
+0006f8ad access_file          # access(): DOS 43h
+0006f8e8 disk_free            # _dos_getdiskfree(): DOS 36h
+00091bcb write_raw            # raw write with append mode: DOS 40h and 42h
+0006a2b4 lock_stack           # DPMI 0600h on the stack
+0006a2d1 unlock_stack         # DPMI 0601h on the stack
+0006a2fe game_heap_low        # game heap in DOS memory: DPMI 0100h
+0006a35a game_heap_high       # game heap in extended memory: DPMI 0500h and 0501h
+0006a4c7 site:release_memory  # game heap release: DPMI 0101h
+0006a4d6 site:release_memory  # game heap release: DPMI 0502h
+00068504 save_keyboard_vectors     # DOS 35h for INT 9 and INT 5
+0006852d restore_keyboard_vectors  # DOS 25h for INT 9 and INT 5
+00068555 install_keyboard          # DOS 25h: the game's keyboard interrupt handler
+00068664 flush_typed_keys          # INT 16h buffer flush
+000688c4 seed_random               # timer port 40h and DOS 2Ch and 2Ah
+00068a07 windows_version           # INT 2Fh 1600h
+00068a25 country_settings          # DOS 3800h
+00068a9d check_drive               # DOS 36h and MSCDEX through DPMI 0300h
+00068b12 install_critical_handler  # DOS 35h and 25h for INT 24h
+00068b3a remove_critical_handler   # DOS 25h for INT 24h
+0007050c timer_measure             # timer chip ports 40h and 43h, DOS 35h for INT 8
+00070564 timer_start               # timer chip ports 40h and 43h, DOS 25h for INT 8
+000705c4 timer_stop                # timer chip ports 40h and 43h, DOS 25h for INT 8
+0007063c site:acknowledge_interrupt  # OUT 20h in the game's timer handler

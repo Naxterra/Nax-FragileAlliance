@@ -1,6 +1,6 @@
 """Translates the discovered 32-bit code of an LE program into C++ for the native runtime.
 
-Usage: python tools/recomp/emit32.py <program> <output folder> [--seeds <file>] [--files <count>]
+Usage: python tools/recomp/emit32.py <program> <output folder> [--seeds <file>] [--overrides <file>] [--files <count>]
 
 The code is split into chunks: every function that discovery found starts a chunk, and a chunk runs up to
 the next one. Each chunk becomes one C++ function with a switch over all of its instruction addresses, so it
@@ -9,6 +9,10 @@ the original return address on the guest stack and call the target chunk directl
 come back to that address, the dispatcher keeps running until it does. Leaving a chunk any other way sets EIP
 and returns to the dispatcher. Reaching an address that was not translated stops the program with a message
 that names it, and so does an instruction the translator does not support.
+
+An overrides file names original functions that are replaced by native C++ functions in nax::native. Such a
+function receives the machine with the arguments in the original registers and the return address on the
+guest stack, and it performs the return itself.
 
 The output folder receives the chunk sources, a header with their declarations, the program table and
 image.bin with the object contents after fixups. All of it is derived from the original program, so it stays
@@ -64,9 +68,13 @@ def hexu(value: int) -> str:
 
 
 class Emitter:
-    def __init__(self, image: le.LeImage, found: discover32.Discovery):
+    def __init__(self, image: le.LeImage, found: discover32.Discovery, overrides: dict[int, str] | None = None):
         self.image = image
         self.found = found
+        # A plain name replaces the whole function that starts at the address; "site:name" replaces only the
+        # one instruction at the address, which is how an interrupt inside otherwise ordinary code is handled.
+        self.overrides = {a: n for a, n in (overrides or {}).items() if not n.startswith("site:")}
+        self.sites = {a: n[5:] for a, n in (overrides or {}).items() if n.startswith("site:")}
         self.disassembler = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
         self.disassembler.detail = True
         self.selectors = {}
@@ -84,6 +92,11 @@ class Emitter:
         starts = set(self.found.functions)
         starts |= (discover32.fixup_code_targets(self.image) - table_targets)
         starts &= set(addresses)
+        missing = sorted(a for a in list(self.overrides) + list(self.sites) if a not in self.found.instructions)
+        if missing:
+            raise ValueError("overrides name addresses that are not discovered code: "
+                             + ", ".join(f"{a:08x}" for a in missing))
+        starts |= set(self.overrides)
         if addresses:
             starts.add(addresses[0])
         self.starts = sorted(starts)
@@ -201,6 +214,8 @@ class Emitter:
 
     def translate(self, insn) -> tuple[str, bool]:
         """Returns the C++ statements for one instruction and whether control never falls through."""
+        if insn.address in self.sites:
+            return f"native::{self.sites[insn.address]}(m);", False
         self.check_fixups(insn)
         temps: list[str] = []
         body, terminal = self.body(insn, temps)
@@ -597,7 +612,16 @@ class Emitter:
     def chunk_source(self, index: int) -> str:
         addresses = self.chunks[index]
         start = self.starts[index]
-        lines = [f"void {self.chunk_name(start)}(Machine& m) {{", "    Cpu& c = m.c;", "    switch (c.eip) {"]
+        lines = []
+        names = sorted({self.sites[a] for a in addresses if a in self.sites} |
+                       ({self.overrides[start]} if start in self.overrides else set()))
+        for name in names:
+            lines.append(f"namespace native {{ void {name}(Machine& m); }}")
+        lines += [f"void {self.chunk_name(start)}(Machine& m) {{", "    Cpu& c = m.c;"]
+        if start in self.overrides:
+            # The original function is replaced by native code, which also performs its return.
+            lines.append(f"    if (c.eip == {hexu(start)}) {{ native::{self.overrides[start]}(m); return; }}")
+        lines.append("    switch (c.eip) {")
         for position, address in enumerate(addresses):
             insn = self.found_insn(address)
             text = f"{insn.mnemonic} {insn.op_str}".strip()
@@ -609,7 +633,12 @@ class Emitter:
                 code, terminal = f"m.unsupported({hexu(address)}, \"{safe}\");", True
             following = addresses[position + 1] if position + 1 < len(addresses) else None
             nxt = address + insn.size
-            tail = "" if terminal or following == nxt else f" c.eip = {hexu(nxt)}; return;"
+            if terminal or following == nxt:
+                tail = ""
+            elif self.chunk_of.get(nxt) == index:
+                tail = f" goto {self.label(nxt)};"  # the next instruction overlaps or is further on
+            else:
+                tail = f" c.eip = {hexu(nxt)}; return;"
             lines.append(f"    case {hexu(address)}: {self.label(address)}: {{ {code}{tail} }} // {text}")
         lines += ["    default:", "        m.untranslated(c.eip);", "    }", "}", ""]
         return "\n".join(lines)
@@ -620,9 +649,19 @@ class Emitter:
         return next(self.disassembler.disasm(window, address, 1))
 
 
+def write_if_changed(path: str, text: str) -> None:
+    """Writes a file only when its content changes, so an unchanged module is not compiled again."""
+    if os.path.exists(path):
+        with open(path, encoding="ascii", newline="") as f:
+            if f.read() == text:
+                return
+    with open(path, "w", encoding="ascii", newline="\n") as f:
+        f.write(text)
+
+
 def write_program(image: le.LeImage, found: discover32.Discovery, source_name: str, source: bytes,
-                  output: str, files: int) -> Emitter:
-    emitter = Emitter(image, found)
+                  output: str, files: int, overrides: dict[int, str] | None = None) -> Emitter:
+    emitter = Emitter(image, found, overrides)
     os.makedirs(output, exist_ok=True)
     header = [
         f"// Generated by tools/recomp/emit32.py from {source_name}. This file is derived from the original",
@@ -633,8 +672,7 @@ def write_program(image: le.LeImage, found: discover32.Discovery, source_name: s
     ]
     header += [f"void {emitter.chunk_name(s)}(Machine& m);" for s in emitter.starts]
     header += ["}  // namespace nax", ""]
-    with open(os.path.join(output, "chunks.h"), "w", encoding="ascii", newline="\n") as f:
-        f.write("\n".join(header))
+    write_if_changed(os.path.join(output, "chunks.h"), "\n".join(header))
 
     sources = [emitter.chunk_source(i) for i in range(len(emitter.starts))]
     total = sum(len(s) for s in sources)
@@ -647,8 +685,9 @@ def write_program(image: le.LeImage, found: discover32.Discovery, source_name: s
             size = 0
         groups[-1].append(text)
         size += len(text)
+    wanted = {f"part_{number:03d}.cpp" for number in range(len(groups))}
     for old in os.listdir(output):
-        if old.startswith("part_") and old.endswith(".cpp"):
+        if old.startswith("part_") and old.endswith(".cpp") and old not in wanted:
             os.remove(os.path.join(output, old))
     for number, group in enumerate(groups):
         body = [
@@ -658,8 +697,7 @@ def write_program(image: le.LeImage, found: discover32.Discovery, source_name: s
             "namespace nax {",
             "",
         ] + group + ["}  // namespace nax", ""]
-        with open(os.path.join(output, f"part_{number:03d}.cpp"), "w", encoding="ascii", newline="\n") as f:
-            f.write("\n".join(body))
+        write_if_changed(os.path.join(output, f"part_{number:03d}.cpp"), "\n".join(body))
 
     blob = bytearray()
     objects = []
@@ -690,9 +728,21 @@ def write_program(image: le.LeImage, found: discover32.Discovery, source_name: s
         "}  // namespace nax",
         "",
     ]
-    with open(os.path.join(output, "program.cpp"), "w", encoding="ascii", newline="\n") as f:
-        f.write("\n".join(table))
+    write_if_changed(os.path.join(output, "program.cpp"), "\n".join(table))
     return emitter
+
+
+def read_overrides(path: str | None) -> dict[int, str]:
+    """Reads "<address in hex> <native function name>" lines; text after # is a comment."""
+    overrides = {}
+    if path and os.path.exists(path):
+        with open(path, encoding="ascii") as f:
+            for line in f:
+                line = line.split("#")[0].strip()
+                if line:
+                    address, name = line.split()
+                    overrides[int(address, 16)] = name
+    return overrides
 
 
 def read_seeds(path: str | None) -> set[int]:
@@ -711,13 +761,15 @@ def main() -> int:
     parser.add_argument("program")
     parser.add_argument("output")
     parser.add_argument("--seeds")
+    parser.add_argument("--overrides")
     parser.add_argument("--files", type=int, default=16)
     args = parser.parse_args()
     with open(args.program, "rb") as f:
         source = f.read()
     image = le.load(source)
     found = discover32.discover(image, read_seeds(args.seeds))
-    emitter = write_program(image, found, os.path.basename(args.program), source, args.output, args.files)
+    emitter = write_program(image, found, os.path.basename(args.program), source, args.output, args.files,
+                            read_overrides(args.overrides))
     print(f"{len(found.instructions)} instructions in {len(emitter.starts)} chunks, "
           f"{len(emitter.unsupported)} left as run-time stops")
     report = os.path.join(args.output, "unsupported.txt")

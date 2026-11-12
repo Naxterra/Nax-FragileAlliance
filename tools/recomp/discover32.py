@@ -40,10 +40,11 @@ class Discovery:
     instructions: dict[int, Instruction] = field(default_factory=dict)
     entries: set[int] = field(default_factory=set)
     functions: set[int] = field(default_factory=set)
-    conflicts: list[tuple[int, int]] = field(default_factory=list)
+    conflicts: list[tuple[int, int]] = field(default_factory=list)  # overlapping instructions that were kept
     undecodable: list[int] = field(default_factory=list)
     outside: list[tuple[int, int]] = field(default_factory=list)  # (from, target)
     unresolved_indirect: list[int] = field(default_factory=list)
+    rejected: list[int] = field(default_factory=list)  # fixup targets in code that decode as data
     jump_tables: dict[int, list[int]] = field(default_factory=dict)
     interrupts: collections.Counter = field(default_factory=collections.Counter)
     ports: collections.Counter = field(default_factory=collections.Counter)
@@ -71,7 +72,20 @@ def fixup_code_targets(image: le.LeImage) -> set[int]:
     return targets
 
 
+# Instructions that Watcom code never contains. A trace from an unproven entry that decodes one of them is
+# data that happens to be referenced by a fixup, not code.
+IMPLAUSIBLE = {"arpl", "bound", "aaa", "aas", "aam", "aad", "daa", "das", "salc", "into", "int1", "insb", "insw",
+               "insd", "outsb", "outsw", "outsd", "lldt", "lidt", "lgdt", "ljmp", "lcall"}
+
+
 def discover(image: le.LeImage, seeds: set[int] | None = None) -> Discovery:
+    """Discovers code in two passes.
+
+    The proven pass starts at the program entry and the given seeds and follows every control-flow edge.
+    The second pass tries each fixup target inside code that the first pass did not reach. Such a target may
+    be a function pointer or data stored in the code object, so its whole trace is accepted only when it
+    decodes cleanly, contains no instruction that compiled code never uses and overlaps no accepted code.
+    """
     result = Discovery()
     disassembler = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
     disassembler.detail = True
@@ -81,75 +95,118 @@ def discover(image: le.LeImage, seeds: set[int] | None = None) -> Discovery:
         obj = image.object_at(address)
         return obj if obj is not None and obj.index in code else None
 
-    owner: dict[int, int] = {}  # byte address -> start of the instruction covering it
-    pending = []
-    starts = {image.entry_linear} | fixup_code_targets(image) | (seeds or set())
-    for start in sorted(starts):
-        if in_code(start):
-            result.entries.add(start)
-            pending.append(start)
-    result.functions.add(image.entry_linear)
+    owner: dict[int, int] = {}  # byte address -> start of the accepted instruction covering it
 
-    while pending:
-        address = pending.pop()
-        recent: list[Instruction] = []
-        while True:
-            obj = in_code(address)
-            if obj is None:
-                break
-            if address in result.instructions:
-                break
-            if address in owner:
-                result.conflicts.append((address, owner[address]))
-                break
-            window = bytes(obj.data[address - obj.base:address - obj.base + 16])
-            decoded = next(disassembler.disasm(window, address, 1), None)
-            if decoded is None:
-                result.undecodable.append(address)
-                break
-            clash = next((a for a in range(address, address + decoded.size) if a in owner), None)
-            if clash is not None:
-                result.conflicts.append((address, owner[clash]))
-                break
-            # Capstone reads a DS prefix on an indirect jump as Intel CET "notrack";
-            # on a 386 the prefix only names the default segment, so drop it.
-            mnemonic = decoded.mnemonic.removeprefix("notrack ").removeprefix("bnd ")
-            ins = Instruction(address, decoded.size, mnemonic, decoded.op_str)
-            result.instructions[address] = ins
-            for a in range(address, address + decoded.size):
-                owner[a] = address
-            recent.append(ins)
-            del recent[:-8]
-            group_jump = decoded.group(capstone.CS_GRP_JUMP)
-            group_call = decoded.group(capstone.CS_GRP_CALL)
-            operand = decoded.operands[0] if decoded.operands else None
+    def explore(starts, trace: Discovery, local_owner: dict[int, int], strict: bool) -> bool:
+        pending = list(starts)
+        while pending:
+            address = pending.pop()
+            recent: list[Instruction] = []
+            while True:
+                obj = in_code(address)
+                if obj is None:
+                    break
+                if address in result.instructions or address in trace.instructions:
+                    break
+                taken = owner.get(address, local_owner.get(address))
+                if taken is not None and strict:
+                    return False
+                # On the proven pass a branch into the middle of an instruction is real: compilers and library
+                # code hide a second instruction inside the bytes of a first one to skip it cheaply. Both
+                # readings are kept.
+                overlapping = taken is not None
+                window = bytes(obj.data[address - obj.base:address - obj.base + 16])
+                decoded = next(disassembler.disasm(window, address, 1), None)
+                if decoded is None:
+                    if strict:
+                        return False
+                    trace.undecodable.append(address)
+                    break
+                clash = next((a for a in range(address, address + decoded.size)
+                              if a in owner or a in local_owner), None)
+                if clash is not None:
+                    if strict:
+                        return False
+                    overlapping = True
+                    trace.conflicts.append((address, owner.get(clash, local_owner.get(clash))))
+                # Capstone reads a DS prefix on an indirect jump as Intel CET "notrack";
+                # on a 386 the prefix only names the default segment, so drop it.
+                mnemonic = decoded.mnemonic.removeprefix("notrack ").removeprefix("bnd ")
+                if strict and (mnemonic.split()[-1] in IMPLAUSIBLE or mnemonic.startswith("fcmov")):
+                    return False
+                ins = Instruction(address, decoded.size, mnemonic, decoded.op_str)
+                trace.instructions[address] = ins
+                for a in range(address, address + decoded.size):
+                    if not overlapping or (a not in owner and a not in local_owner):
+                        local_owner[a] = address
+                recent.append(ins)
+                del recent[:-8]
+                group_jump = decoded.group(capstone.CS_GRP_JUMP)
+                group_call = decoded.group(capstone.CS_GRP_CALL)
+                operand = decoded.operands[0] if decoded.operands else None
 
-            if mnemonic == "int":
-                _record_interrupt(result, decoded, recent)
-            elif mnemonic in ("in", "out", "insb", "insw", "insd", "outsb", "outsw", "outsd"):
-                _record_port(result, decoded, recent)
+                if mnemonic == "int":
+                    _record_interrupt(trace, decoded, recent)
+                elif mnemonic in ("in", "out", "insb", "insw", "insd", "outsb", "outsw", "outsd"):
+                    _record_port(trace, decoded, recent)
 
-            if (group_jump or group_call) and operand is not None and operand.type == x86.X86_OP_IMM:
-                target = operand.imm & 0xFFFFFFFF
-                ins.target = target
-                if in_code(target):
-                    if target not in result.instructions:
+                if (group_jump or group_call) and operand is not None and operand.type == x86.X86_OP_IMM:
+                    target = operand.imm & 0xFFFFFFFF
+                    ins.target = target
+                    if in_code(target):
                         pending.append(target)
-                    if group_call:
-                        result.functions.add(target)
-                else:
-                    result.outside.append((address, target))
-            elif (group_jump or group_call) and mnemonic not in ("ljmp", "lcall"):
-                table = _jump_table(image, decoded, mnemonic, in_code)
-                if table:
-                    result.jump_tables[address] = table
-                    pending.extend(t for t in table if t not in result.instructions)
-                else:
-                    result.unresolved_indirect.append(address)
+                        if group_call:
+                            trace.functions.add(target)
+                    else:
+                        if strict:
+                            return False
+                        trace.outside.append((address, target))
+                elif (group_jump or group_call) and mnemonic not in ("ljmp", "lcall"):
+                    table = _jump_table(image, decoded, mnemonic, in_code)
+                    if table:
+                        trace.jump_tables[address] = table
+                        pending.extend(table)
+                    else:
+                        trace.unresolved_indirect.append(address)
 
-            if mnemonic in TERMINATORS:
-                break
-            address += decoded.size
+                if mnemonic in TERMINATORS:
+                    break
+                address += decoded.size
+        return True
+
+    def accept(trace: Discovery, local_owner: dict[int, int]) -> None:
+        result.instructions.update(trace.instructions)
+        owner.update(local_owner)
+        result.functions |= trace.functions
+        result.conflicts += trace.conflicts
+        result.undecodable += trace.undecodable
+        result.outside += trace.outside
+        result.unresolved_indirect += trace.unresolved_indirect
+        result.jump_tables.update(trace.jump_tables)
+        result.interrupts.update(trace.interrupts)
+        result.ports.update(trace.ports)
+
+    proven = [s for s in sorted({image.entry_linear} | (seeds or set())) if in_code(s)]
+    result.entries.update(proven)
+    result.functions.add(image.entry_linear)
+    result.functions.update(proven)
+    trace, local = Discovery(), {}
+    explore(proven, trace, local, strict=False)
+    accept(trace, local)
+
+    for target in sorted(fixup_code_targets(image)):
+        if not in_code(target) or target in result.instructions:
+            continue
+        if target in owner:
+            result.rejected.append(target)
+            continue
+        trace, local = Discovery(), {}
+        if explore([target], trace, local, strict=True):
+            trace.functions.add(target)
+            result.entries.add(target)
+            accept(trace, local)
+        else:
+            result.rejected.append(target)
     return result
 
 

@@ -160,14 +160,16 @@ def single_program(code: bytes):
     return bound_program(objects, {})
 
 
-def build_and_run(name: str, program: bytes, dump_start: int, dump_length: int):
+def build_and_run(name: str, program: bytes, dump_start: int, dump_length: int, overrides=None, natives=False):
     folder = os.path.join(ROOT, "build", "tests", name)
     generated = os.path.join(folder, "generated")
     os.makedirs(generated, exist_ok=True)
     image = le.load(program)
     found = discover32.discover(image)
-    emitter = emit32.write_program(image, found, f"{name}.exe", program, generated, 1)
+    emitter = emit32.write_program(image, found, f"{name}.exe", program, generated, 1, overrides)
     sources = [os.path.join(ROOT, "runtime", "core.cpp"), os.path.join(ROOT, "tests", "cpp", "emit_harness.cpp")]
+    if natives:
+        sources.append(os.path.join(ROOT, "tests", "cpp", "test_natives.cpp"))
     sources += [os.path.join(generated, f) for f in sorted(os.listdir(generated)) if f.endswith(".cpp")]
     exe = os.path.join(folder, "harness.exe")
     quoted = " ".join(f"'{s}'" for s in sources)
@@ -258,6 +260,30 @@ class TranslatedProgramTests(unittest.TestCase):
         cases = set(self.emitter.found.jump_tables[next(iter(self.emitter.found.jump_tables))])
         self.assertEqual(len(cases), 3)
         self.assertFalse(cases & set(self.emitter.starts))
+
+
+@unittest.skipUnless(HAVE_COMPILER, "the Visual Studio C++ build tools are not installed")
+class OverrideTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        a = Asm()
+        a.b(0xB8); a.d32(21); a.call("f"); a.b(0xA3); a.d32(R + 0)
+        a.label("site"); a.b(0xBB); a.d32(1)
+        a.b(0x89, 0x1D); a.d32(R + 4)
+        a.b(0xC3)
+        a.label("f"); a.b(0xB8); a.d32(1); a.b(0xC3)
+        code, fixups = a.finish()
+        objects = [(CODE_BASE, CODE_FLAGS, code, len(code)), (DATA_BASE, DATA_FLAGS, bytes(0x1000), 0x1000)]
+        overrides = {CODE_BASE + a.labels["f"]: "test_double", CODE_BASE + a.labels["site"]: "site:test_site"}
+        cls.outcome, _, cls.memory, _ = build_and_run("overrides", bound_program(objects, {1: fixups}), DATA_BASE, 8,
+                                                      overrides, natives=True)
+
+    def test_overridden_function_runs_native_code_and_returns_to_its_caller(self):
+        self.assertEqual(self.outcome, "ok")
+        self.assertEqual(struct.unpack_from("<I", self.memory, 0)[0], 42)
+
+    def test_site_override_replaces_only_that_instruction(self):
+        self.assertEqual(struct.unpack_from("<I", self.memory, 4)[0], 0x77)
 
 
 @unittest.skipUnless(HAVE_COMPILER, "the Visual Studio C++ build tools are not installed")

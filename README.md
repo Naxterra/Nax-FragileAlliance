@@ -1,31 +1,39 @@
 # Nax Fragile Allegiance
 
-Nax Fragile Allegiance is meant to make *Fragile Allegiance* (Gremlin Interactive, 1996) run natively on Windows 11 without DOSBox or any other emulator. A translator turns the 32-bit x86 code of a legally owned copy into C++ ahead of time, and a native runtime will replace DOS, the DOS/4GW extender and the PC hardware with Win32 services, a Direct3D 12 presenter and XAudio2 sound.
+Nax Fragile Allegiance makes *Fragile Allegiance* (Gremlin Interactive, 1996) run natively on Windows 11 without DOSBox or any other emulator. A translator turns the 32-bit x86 code of a legally owned copy into C++ ahead of time. Every place where the original program talks to DOS, the DOS/4GW extender, the BIOS or the PC hardware is replaced by native Windows code.
 
-The repository contains only the translator and the runtime. It contains no game code, graphics, sound, text or data. Every build reads the original files from a copy that the user owns, for example the GOG release, and the translated program stays on that user's machine.
+The repository contains only the translator, the runtime and the native replacements. It contains no game code, graphics, sound, text or data. Every build reads the original files from a copy that the user owns, for example the GOG release, and the translated program stays on that user's machine.
 
 ## Status
 
-The project is at its first stage. The game does not run yet.
+The game does not show a picture yet. Its own start-up code runs natively on Windows: the C library starts, the game prints its start-up messages, reads its configuration, sets up its memory and starts its timer. It stops when it reaches the graphics module, which is the next part to replace.
 
 | Part | State |
 |---|---|
-| Loader for the DOS/4GW bound program (`FRAGILE.EXE`) | Done. It finds the application inside the extender, places its three objects at their base addresses and applies all internal fixups. |
-| Code discovery | First pass done. From the entry point, the fixup targets and the jump tables it reaches about 92 % of the 530 KB code object. |
-| Translation to C++ | Done for the whole program. The 156,751 discovered instructions become 2,875 C++ functions that compile with optimisation. 51 instructions, mostly privileged, BCD or 16-bit-addressing forms in places that are probably data, stop the program with a message if they are ever reached. |
-| CPU core (registers, flags, x87, the 4 GB guest address space, the dispatcher) | Done and tested with hand-assembled programs. |
-| Runtime (DOS and DPMI services, VESA graphics, timer, keyboard, mouse, sound, CD image) | Not started. |
+| Loader for the DOS/4GW bound program (`FRAGILE.EXE`) | Done. |
+| Code discovery | Done. Proven control flow comes first. A fixup target inside code is accepted only when it decodes as plausible code, and instructions that the original code hides inside other instructions are kept. |
+| Translation to C++ | Done for the whole program. Original functions, or single instructions, can be replaced by native C++ code. |
+| CPU core (registers, flags, x87, the 4 GB guest address space, the dispatcher) | Done. |
+| Start-up, memory, files, clock, country settings, timer | Native Windows replacements. |
+| Graphics, keyboard and mouse input, sound | Not replaced yet. |
 
-## What the game needs from the machine
+## How the game runs on Windows
 
-The survey of the original program shows what the runtime has to provide.
+There is no DOS, no DOS extender and no emulated PC hardware. Every place where the original program would call DOS, the extender, the BIOS or a hardware port is replaced by a native function, listed in `games\fragile\overrides.txt`. Most replacements cover a whole function of the C library or of the game, such as `open`, `read` or the timer set-up. Where such a call sits inside the game's own logic, only that one instruction is replaced. If the program reaches a DOS call, an extender call or a port access that has no replacement yet, it stops with a message that names the original function.
 
-| Area | What the program uses |
+| Area | Native replacement |
 |---|---|
-| Memory and extender | DOS/4GW flat model, DPMI services for DOS memory, real-mode interrupts and interrupt vectors. |
-| Files | DOS file services. The game data on the GOG CD image `FRAGILE.DAT` is read as drive D:. |
+| Start-up | The command line, the environment and the library's start-up variables come from Windows. |
+| Memory | Heap blocks come from the 4 GB guest address space. |
+| Files | Drive C: is the game folder and drive D: is the CD image `FRAGILE.DAT`, which is read directly. Every write goes to `%LOCALAPPDATA%\Nax Fragile Allegiance\C`, first into a temporary file that replaces the previous version only when the game closes the file. The original files are never changed. Save games that GOG keeps in `cloud_saves` are read as well. |
+| Clock and timer | The game's timer interrupt handler is called at its own rate from the Windows performance counter. |
+
+## What the game still needs
+
+| Area | What the original program uses |
+|---|---|
 | Graphics | VESA SVGA with bank switching (function 4F05h) and the VGA palette and retrace ports. |
-| Timing and input | The programmable interval timer, the interrupt controller, the keyboard controller and the INT 33h mouse driver. |
+| Input | The game's keyboard handler (its key table is already filled natively once a window exists) and the INT 33h mouse driver. |
 | Sound | The HMI sound library with its drivers `HMIDRV.386` and `HMIMDRV.386`, configured for a Sound Blaster at 220h and General MIDI at 330h. |
 | Network | IPX and a serial-port handler in a small 16-bit object. Multiplayer is not planned for now. |
 
@@ -36,21 +44,29 @@ The survey of the original program shows what the runtime has to provide.
 - Visual Studio Build Tools with the C++ workload, installed with `winget install Microsoft.VisualStudio.BuildTools`.
 - Your own copy of *Fragile Allegiance*, for example the GOG release.
 
-## Trying the current stage
+## Building and running
 
-The survey tool prints what the loader and discovery find in your copy:
+`build.ps1` translates `FRAGILE.EXE` from the folder that the GOG installer recorded, or from `-GameFolder <folder>`, and builds `build\fragile\FragileAllegiance.exe`. Only sources that changed are compiled again; `-Clean` compiles everything.
+
+```powershell
+.\build.ps1
+.\build\fragile\FragileAllegiance.exe
+```
+
+The program finds the game folder the same way, or takes `--data <folder>`. It writes a log to `%LOCALAPPDATA%\Nax Fragile Allegiance\runtime.log`.
+
+## Looking at the original program
+
+The survey tool prints what the loader and discovery find in your copy, and the listing tool prints the original instructions of a function:
 
 ```powershell
 python tools\recomp\survey.py "<your Fragile Allegiance folder>\FRAGILE.EXE"
+python tools\recomp\listing.py "<your Fragile Allegiance folder>\FRAGILE.EXE" 70564
 ```
 
-The translator writes the C++ code, the program table and the object image to a local folder that is never committed:
+## Tests
 
-```powershell
-python tools\recomp\emit32.py "<your Fragile Allegiance folder>\FRAGILE.EXE" generated\fragile
-```
-
-The tests use small synthetic programs and need no game files. The tests in `tests\test_emit32.py` translate hand-assembled programs, compile them with the CPU core and run them, so they need the C++ build tools:
+The tests use small synthetic programs and a small built-in CD image, so they need no game files. The tests in `tests\test_emit32.py` and `tests\test_runtime.py` compile C++ and need the C++ build tools:
 
 ```powershell
 python -m unittest discover -s tests -v
@@ -60,9 +76,10 @@ python -m unittest discover -s tests -v
 
 | Folder | Content |
 |---|---|
-| `tools/recomp` | The translator: the LE loader, code discovery, the C++ generator and the survey tool, written in Python. |
-| `runtime` | The CPU core that translated code runs on: registers, flags, x87, guest memory and the dispatcher. |
-| `tests` | Tests for the translator and the CPU core. |
+| `tools/recomp` | The translator: the LE loader, code discovery, the C++ generator, the survey and the listing tool, written in Python. |
+| `runtime` | The CPU core that translated code runs on, the Windows host, the file layer and the CD image reader. |
+| `games/fragile` | The native replacements for Fragile Allegiance and the list of replaced functions. |
+| `tests` | Tests for the translator, the CPU core and the file layer. |
 
 ## License
 

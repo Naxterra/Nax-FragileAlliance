@@ -175,5 +175,27 @@ class DiscoveryTests(unittest.TestCase):
         self.assertTrue(found.conflicts)
 
 
+class DiscoveryPassTests(unittest.TestCase):
+    def test_fixup_target_that_decodes_as_data_is_rejected(self):
+        code = bytearray(0x20)
+        code[0:5] = b"\xE9" + struct.pack("<i", 0x10 - 5)  # jmp 0x10
+        code[5:9] = b"\x63\x6F\x6E\x00"  # the text "con", which decodes as ARPL
+        code[0x10] = 0xC3
+        objects = [(CODE_BASE, CODE_FLAGS, bytes(code), 0x20), (DATA_BASE, DATA_FLAGS, DATA, 0x2000)]
+        image = le.load(bound_program(objects, {2: fixup32(0x0, 1, 0x05)}))
+        found = discover32.discover(image)
+        self.assertIn(CODE_BASE + 5, found.rejected)
+        self.assertNotIn(CODE_BASE + 5, found.instructions)
+        self.assertIn(CODE_BASE + 0x10, found.instructions)
+
+    def test_branch_into_the_middle_of_an_instruction_keeps_both_readings(self):
+        code = bytes([0x74, 0x02, 0x66, 0xA9, 0x89, 0xCF, 0xC3])  # je 4; test ax, 0CF89h; ret (4: mov edi, ecx)
+        objects = [(CODE_BASE, CODE_FLAGS, code, len(code))]
+        found = discover32.discover(le.load(bound_program(objects, {})))
+        self.assertEqual(found.instructions[CODE_BASE + 2].mnemonic, "test")
+        self.assertEqual(found.instructions[CODE_BASE + 4].mnemonic, "mov")
+        self.assertIn(CODE_BASE + 6, found.instructions)
+
+
 if __name__ == "__main__":
     unittest.main()

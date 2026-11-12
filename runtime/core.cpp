@@ -37,6 +37,7 @@ const Chunk* Machine::find(uint32_t address) const {
 
 void Machine::run_until(uint32_t ret, uint32_t sp0) {
     while (c.eip != ret || c.sp.e < sp0) {
+        if (--budget < 0) poll();
         const Chunk* chunk = find(c.eip);
         if (!chunk) untranslated(c.eip);
         chunk->fn(*this);

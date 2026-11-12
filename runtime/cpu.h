@@ -139,6 +139,21 @@ public:
         if (c.eip != ret || c.sp.e < sp0) run_until(ret, sp0);
     }
     void call_far(uint32_t ret, uint32_t sp0) { run_until(ret, sp0); }
+    // Native code calls an original function with the registers as they are and returns when it has returned.
+    static constexpr uint32_t kNativeReturn = 0xFFFFFFF0u;
+    void call(uint32_t address) {
+        const uint32_t sp0 = c.sp.e;
+        const uint32_t saved = c.eip;
+        push32(kNativeReturn);
+        c.eip = address;
+        run_until(kNativeReturn, sp0);
+        c.eip = saved;
+    }
+    // Ends a native replacement the way the original function ended: RET, or RET n for stack arguments.
+    void ret(uint32_t stack_bytes = 0) {
+        c.eip = pop32();
+        c.sp.e += stack_bytes;
+    }
     const Chunk* find(uint32_t address) const;
     [[noreturn]] void untranslated(uint32_t address);
     [[noreturn]] void unsupported(uint32_t address, const char* text);
@@ -155,7 +170,7 @@ public:
     virtual bool segment_limit(uint16_t selector, uint32_t* limit) { (void)selector; *limit = 0xFFFFFFFF; return true; }
     virtual bool segment_rights(uint16_t selector, uint32_t* rights) { (void)selector; *rights = 0x00CFF300; return true; }
 
-    // Services supplied by the DOS and hardware part of the runtime.
+    // Services supplied by the platform part of the runtime.
     virtual void interrupt(uint8_t n, uint32_t next_eip) = 0;
     virtual uint32_t port_in(uint16_t port, int bytes) = 0;
     virtual void port_out(uint16_t port, uint32_t value, int bytes) = 0;
