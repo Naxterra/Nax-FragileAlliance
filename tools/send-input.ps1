@@ -1,6 +1,7 @@
 # Sends keyboard and mouse input to a running Fragile Allegiance window, for testing the native input path.
-# Each step is "key:<scan code in hex>", "click:<x>,<y>" in game pixels of a 640x480 picture, or "wait:<seconds>".
-param([string[]]$Steps)
+# Steps are separated by spaces. Each is "key:<scan code in hex>", "click:<x>,<y>" in game pixels of a 640x480
+# picture, or "wait:<seconds>".
+param([string]$Steps)
 $ErrorActionPreference = "Stop"
 Add-Type @"
 using System;
@@ -14,7 +15,7 @@ public static class NaxInput {
 "@
 $window = [NaxInput]::FindWindow("NaxFragileAllegiance", [NullString]::Value)
 if ($window -eq [IntPtr]::Zero) { throw "The game window is not open." }
-foreach ($step in $Steps) {
+foreach ($step in ($Steps -split " " | Where-Object { $_ })) {
     $kind, $value = $step.Split(":", 2)
     switch ($kind) {
         "wait" { Start-Sleep -Milliseconds ([int]([double]$value * 1000)) }

@@ -306,7 +306,8 @@ class StopTests(unittest.TestCase):
     def test_jump_to_untranslated_address_stops_with_that_address(self):
         code = bytes([0xB8]) + struct.pack("<I", DATA_BASE + 0x500) + bytes([0xFF, 0xE0])
         outcome, _, _, _ = build_and_run("untranslated", single_program(code), DATA_BASE, 4)
-        self.assertEqual(outcome, "fault The program reached address 00020500, which was not translated.")
+        self.assertTrue(outcome.startswith("fault The program reached address 00020500, which was not translated."), outcome)
+        self.assertIn("Recently entered: 00010000 00020500.", outcome)
 
     def test_unsupported_instruction_stops_with_its_name(self):
         code = bytes([0x90, 0x27, 0xC3])

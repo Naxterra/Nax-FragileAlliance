@@ -115,6 +115,10 @@ public:
     uint8_t* mem = nullptr;  // base of the reserved guest address space
     int budget = 0;          // translated code calls poll() when this runs below zero
     uint32_t load_shift = 0; // how far the program was moved above its link addresses; messages name link addresses
+    // The last addresses the dispatcher entered, newest last, for messages about a stop.
+    uint32_t history[16]{};
+    unsigned history_next = 0;
+    std::string recent_path() const;
 
     // Memory. Every 32-bit address lies inside the reservation; touching a page that was never committed
     // is reported by the fault handler with the guest address.

@@ -38,16 +38,42 @@ const Chunk* Machine::find(uint32_t address) const {
 void Machine::run_until(uint32_t ret, uint32_t sp0) {
     while (c.eip != ret || c.sp.e < sp0) {
         if (--budget < 0) poll();
+        history[history_next++ & 15] = c.eip;
         const Chunk* chunk = find(c.eip);
         if (!chunk) untranslated(c.eip);
         chunk->fn(*this);
     }
 }
 
+std::string Machine::recent_path() const {
+    std::string text = " Recently entered:";
+    char part[16];
+    for (unsigned i = 0; i < 16; i++) {
+        const uint32_t a = history[(history_next + i) & 15];
+        if (!a) continue;
+        std::snprintf(part, sizeof part, " %08X", a - load_shift);
+        text += part;
+    }
+    text += ". Stack:";
+    for (uint32_t i = 0; i < 8; i++) {
+        const uint32_t a = c.base[SS] + c.sp.e + 4 * i;
+        // The stack may end at an uncommitted page; only committed memory is read.
+        MEMORY_BASIC_INFORMATION info{};
+        if (!VirtualQuery(mem + a, &info, sizeof info) || info.State != MEM_COMMIT ||
+            static_cast<const uint8_t*>(info.BaseAddress) + info.RegionSize < mem + a + 4)
+            break;
+        uint32_t v;
+        std::memcpy(&v, mem + a, 4);
+        std::snprintf(part, sizeof part, " %08X", v >= load_shift ? v - load_shift : v);
+        text += part;
+    }
+    return text + ".";
+}
+
 void Machine::untranslated(uint32_t address) {
     char text[128];
     std::snprintf(text, sizeof text, "The program reached address %08X, which was not translated.", address - load_shift);
-    throw GuestFault(text);
+    throw GuestFault(text + recent_path());
 }
 
 void Machine::unsupported(uint32_t address, const char* instruction) {
