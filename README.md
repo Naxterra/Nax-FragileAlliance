@@ -6,16 +6,18 @@ The repository contains only the translator, the runtime and the native replacem
 
 ## Status
 
-The game does not show a picture yet. Its own start-up code runs natively on Windows: the C library starts, the game prints its start-up messages, reads its configuration, sets up its memory and starts its timer. It stops when it reaches the graphics module, which is the next part to replace.
+The game starts natively on Windows 11 and shows its title screen and main menu in a Direct3D 12 window, and mouse clicks reach the menu. Choosing a menu entry can still stop the program, and sound and the two intro movies are not replaced yet, so the game is not playable yet.
 
 | Part | State |
 |---|---|
-| Loader for the DOS/4GW bound program (`FRAGILE.EXE`) | Done. |
-| Code discovery | Done. Proven control flow comes first. A fixup target inside code is accepted only when it decodes as plausible code, and instructions that the original code hides inside other instructions are kept. |
-| Translation to C++ | Done for the whole program. Original functions, or single instructions, can be replaced by native C++ code. |
+| Loader, code discovery and translation to C++ | Done for the whole program. Original functions, or single instructions, can be replaced by native C++ code. |
 | CPU core (registers, flags, x87, the 4 GB guest address space, the dispatcher) | Done. |
 | Start-up, memory, files, clock, country settings, timer | Native Windows replacements. |
-| Graphics, keyboard and mouse input, sound | Not replaced yet. |
+| Graphics | Native. The picture is shown through Direct3D 12 with three filters (F11), in a window or borderless fullscreen (Alt+Enter), and F12 saves a screenshot. |
+| Keyboard and mouse | Native. Windows messages feed the game's own key table and mouse handler. |
+| Network | Reported as absent, so the game runs as a single-player game. |
+| Sound | Not replaced yet. The game runs without sound. |
+| Intro movies (GDV) | Not replaced yet. They are skipped. |
 
 ## How the game runs on Windows
 
@@ -27,15 +29,17 @@ There is no DOS, no DOS extender and no emulated PC hardware. Every place where 
 | Memory | Heap blocks come from the 4 GB guest address space. |
 | Files | Drive C: is the game folder and drive D: is the CD image `FRAGILE.DAT`, which is read directly. Every write goes to `%LOCALAPPDATA%\Nax Fragile Allegiance\C`, first into a temporary file that replaces the previous version only when the game closes the file. The original files are never changed. Save games that GOG keeps in `cloud_saves` are read as well. |
 | Clock and timer | The game's timer interrupt handler is called at its own rate from the Windows performance counter. |
+| Graphics | The game's 64 KB VESA bank window at A0000h is backed by a framebuffer. A bank switch swaps the window with the framebuffer, as the video card's memory mapping did, and the window thread shows the framebuffer through Direct3D 12. Palette writes go to the display directly. |
+| Keyboard and mouse | Windows key messages are fed into the game's key table the way its keyboard interrupt handler did, and the game's mouse handler is called for every mouse message, with the game pointer kept exactly under the Windows pointer. |
+| Memory layout | The program is loaded 4 MB above its link addresses, as DOS/4GW loaded it, so the first 640 KB stay free for the game's fixed data. |
 
 ## What the game still needs
 
 | Area | What the original program uses |
 |---|---|
-| Graphics | VESA SVGA with bank switching (function 4F05h) and the VGA palette and retrace ports. |
-| Input | The game's keyboard handler (its key table is already filled natively once a window exists) and the INT 33h mouse driver. |
-| Sound | The HMI sound library with its drivers `HMIDRV.386` and `HMIMDRV.386`, configured for a Sound Blaster at 220h and General MIDI at 330h. |
-| Network | IPX and a serial-port handler in a small 16-bit object. Multiplayer is not planned for now. |
+| Sound | The HMI sound library with its driver `HMIDRV.386`, configured for a Sound Blaster at 220h. |
+| Movies | The GDV movie player draws in VGA mode X, one plane at a time. |
+| Network | IPX, NetBIOS and a serial-port handler. Multiplayer is not planned for now. |
 
 ## Requirements
 
