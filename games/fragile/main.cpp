@@ -150,7 +150,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         return 4;
     }
     std::string error;
-    if (!nax::run_window(game.display, game.mem, options, run.finished, &error)) {
+    if (!nax::run_window(game.display, options, run.finished, &error)) {
         game.display.quit = true;
         report(error);
     }

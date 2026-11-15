@@ -8,20 +8,105 @@
 
 namespace nax {
 
+namespace {
+
+// The placeholder functions of Windows 10 1803 and later, which let a view replace part of a reservation.
+using VirtualAlloc2Fn = PVOID(WINAPI*)(HANDLE, PVOID, SIZE_T, ULONG, ULONG, MEM_EXTENDED_PARAMETER*, ULONG);
+using MapViewOfFile3Fn = PVOID(WINAPI*)(HANDLE, HANDLE, PVOID, ULONG64, SIZE_T, ULONG, ULONG, MEM_EXTENDED_PARAMETER*, ULONG);
+using UnmapViewOfFile2Fn = BOOL(WINAPI*)(HANDLE, PVOID, ULONG);
+
+struct PlaceholderApi {
+    VirtualAlloc2Fn alloc = nullptr;
+    MapViewOfFile3Fn map = nullptr;
+    UnmapViewOfFile2Fn unmap = nullptr;
+    PlaceholderApi() {
+        HMODULE kernel = GetModuleHandleW(L"kernelbase.dll");
+        if (!kernel) return;
+        alloc = reinterpret_cast<VirtualAlloc2Fn>(GetProcAddress(kernel, "VirtualAlloc2"));
+        map = reinterpret_cast<MapViewOfFile3Fn>(GetProcAddress(kernel, "MapViewOfFile3"));
+        unmap = reinterpret_cast<UnmapViewOfFile2Fn>(GetProcAddress(kernel, "UnmapViewOfFile2"));
+    }
+    bool ok() const { return alloc && map && unmap; }
+};
+
+const PlaceholderApi& api() {
+    static const PlaceholderApi instance;
+    return instance;
+}
+
+}  // namespace
+
 Machine::Machine() {
-    mem = static_cast<uint8_t*>(VirtualAlloc(nullptr, kReserved, MEM_RESERVE, PAGE_NOACCESS));
+    const PlaceholderApi& p = api();
+    if (!p.ok()) throw std::runtime_error("This version of Windows lacks the memory placeholder functions (Windows 10 1803 or later is needed).");
+    // One placeholder covers the whole guest space. It is split into the part below the windows, the two
+    // windows and the rest; the two outer parts become ordinary reservations that commit() fills.
+    mem = static_cast<uint8_t*>(p.alloc(GetCurrentProcess(), nullptr, kReserved, MEM_RESERVE | MEM_RESERVE_PLACEHOLDER,
+                                        PAGE_NOACCESS, nullptr, 0));
     if (!mem) throw std::runtime_error("Reserving the 4 GB guest address space failed.");
+    const uint32_t windows_end = kWindowB + kWindowSize;
+    static_assert(kWindowB == kWindowA + kWindowSize, "the two windows must be next to each other");
+    bool ok = VirtualFree(mem, kWindowA, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER) &&
+              VirtualFree(mem + kWindowA, kWindowSize, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER) &&
+              VirtualFree(mem + kWindowB, kWindowSize, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER);
+    ok = ok && p.alloc(GetCurrentProcess(), mem, kWindowA, MEM_RESERVE | MEM_REPLACE_PLACEHOLDER, PAGE_NOACCESS, nullptr, 0);
+    ok = ok && p.alloc(GetCurrentProcess(), mem + windows_end, kReserved - windows_end, MEM_RESERVE | MEM_REPLACE_PLACEHOLDER,
+                       PAGE_NOACCESS, nullptr, 0);
+    video_section_ = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, DWORD(kVideoSection >> 32),
+                                        DWORD(kVideoSection), nullptr);
+    ok = ok && video_section_;
+    if (ok) vram = static_cast<uint8_t*>(MapViewOfFile(video_section_, FILE_MAP_ALL_ACCESS, 0, 0, kVideoMemory));
+    ok = ok && vram;
+    ok = ok && p.map(video_section_, GetCurrentProcess(), mem + kWindowA, 0, kWindowSize, MEM_REPLACE_PLACEHOLDER,
+                     PAGE_READWRITE, nullptr, 0);
+    ok = ok && p.map(video_section_, GetCurrentProcess(), mem + kWindowB, 0, kWindowSize, MEM_REPLACE_PLACEHOLDER,
+                     PAGE_READWRITE, nullptr, 0);
+    if (!ok) throw std::runtime_error("Setting up the guest address space with its video windows failed.");
     budget = 100000;
 }
 
 Machine::~Machine() {
-    if (mem) VirtualFree(mem, 0, MEM_RELEASE);
+    const PlaceholderApi& p = api();
+    if (mem) {
+        p.unmap(GetCurrentProcess(), mem + kWindowA, 0);
+        p.unmap(GetCurrentProcess(), mem + kWindowB, 0);
+        VirtualFree(mem, 0, MEM_RELEASE);
+        VirtualFree(mem + kWindowB + kWindowSize, 0, MEM_RELEASE);
+    }
+    if (vram) UnmapViewOfFile(vram);
+    if (video_section_) CloseHandle(video_section_);
+}
+
+bool Machine::map_window(int window, uint32_t bank) {
+    window &= 1;
+    if (bank == window_bank_[window]) return true;
+    if ((uint64_t(bank) + 1) * kBankSize > kVideoMemory) return false;
+    const PlaceholderApi& p = api();
+    uint8_t* at = mem + (window ? kWindowB : kWindowA);
+    if (!p.unmap(GetCurrentProcess(), at, MEM_PRESERVE_PLACEHOLDER)) return false;
+    if (!p.map(video_section_, GetCurrentProcess(), at, uint64_t(bank) * kBankSize, kWindowSize, MEM_REPLACE_PLACEHOLDER,
+               PAGE_READWRITE, nullptr, 0))
+        return false;
+    window_bank_[window] = bank;
+    return true;
 }
 
 bool Machine::commit(uint32_t address, uint32_t size) {
     if (size == 0) return true;
     if (uint64_t(address) + size > 0x100000000ull) return false;
-    return VirtualAlloc(mem + address, size, MEM_COMMIT, PAGE_READWRITE) != nullptr;
+    // The two video windows are always backed by video memory, so a range across them is committed around them.
+    const uint64_t end = uint64_t(address) + size;
+    const uint32_t windows_end = kWindowB + kWindowSize;
+    bool ok = true;
+    if (address < kWindowA) {
+        const uint32_t part_end = uint32_t(std::min<uint64_t>(end, kWindowA));
+        ok = ok && VirtualAlloc(mem + address, part_end - address, MEM_COMMIT, PAGE_READWRITE) != nullptr;
+    }
+    if (end > windows_end) {
+        const uint32_t part_start = std::max(address, windows_end);
+        ok = ok && VirtualAlloc(mem + part_start, size_t(end - part_start), MEM_COMMIT, PAGE_READWRITE) != nullptr;
+    }
+    return ok;
 }
 
 const Chunk* Machine::find(uint32_t address) const {

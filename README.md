@@ -6,7 +6,7 @@ The repository contains only the translator, the runtime and the native replacem
 
 ## Status
 
-The game starts natively on Windows 11 and shows its title screen and main menu in a Direct3D 12 window, and mouse clicks reach the menu. Choosing a menu entry can still stop the program, and sound and the two intro movies are not replaced yet, so the game is not playable yet.
+The game starts natively on Windows 11, shows its title screen and menus in a Direct3D 12 window and can be played: a preset game such as "Beginner's Luck" starts and runs on the strategic map. Sound and the two intro movies are not replaced yet, and only the start of a game has been tried so far.
 
 | Part | State |
 |---|---|
@@ -29,7 +29,7 @@ There is no DOS, no DOS extender and no emulated PC hardware. Every place where 
 | Memory | Heap blocks come from the 4 GB guest address space. |
 | Files | Drive C: is the game folder and drive D: is the CD image `FRAGILE.DAT`, which is read directly. Every write goes to `%LOCALAPPDATA%\Nax Fragile Allegiance\C`, first into a temporary file that replaces the previous version only when the game closes the file. The original files are never changed. Save games that GOG keeps in `cloud_saves` are read as well. |
 | Clock and timer | The game's timer interrupt handler is called at its own rate from the Windows performance counter. |
-| Graphics | The game's 64 KB VESA bank window at A0000h is backed by a framebuffer. A bank switch swaps the window with the framebuffer, as the video card's memory mapping did, and the window thread shows the framebuffer through Direct3D 12. Palette writes go to the display directly. |
+| Graphics | Video memory is a Windows memory section. The game's read and write windows are 4 MB views of it, and a bank switch maps a different part of the section into a window, as a VESA card's memory mapping did, so nothing is copied. The window thread shows the section through Direct3D 12. Palette writes go to the display directly. |
 | Keyboard and mouse | Windows key messages are fed into the game's key table the way its keyboard interrupt handler did, and the game's mouse handler is called for every mouse message, with the game pointer kept exactly under the Windows pointer. |
 | Memory layout | The program is loaded 4 MB above its link addresses, as DOS/4GW loaded it, so the first 640 KB stay free for the game's fixed data. |
 

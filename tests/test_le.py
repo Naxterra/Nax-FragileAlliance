@@ -188,6 +188,23 @@ class DiscoveryPassTests(unittest.TestCase):
         self.assertNotIn(CODE_BASE + 5, found.instructions)
         self.assertIn(CODE_BASE + 0x10, found.instructions)
 
+    def test_jump_table_in_code_does_not_hide_the_function_after_it(self):
+        # A table of two code addresses at 10h, used by a function at 20h that only a function pointer in the
+        # data object reaches. The table address also carries a fixup, but it is data.
+        code = bytearray(0x40)
+        code[0x00] = 0xC3  # the program entry only returns
+        code[0x1F] = 0x05  # padding that, read as code from the table, swallows the start of the function
+        code[0x20:0x27] = bytes([0xFF, 0x24, 0x85]) + struct.pack("<I", 0)  # jmp [eax*4 + table]
+        code[0x30] = 0xC3
+        code[0x31] = 0xC3
+        objects = [(CODE_BASE, CODE_FLAGS, bytes(code), 0x40), (DATA_BASE, DATA_FLAGS, DATA, 0x2000)]
+        code_fixups = fixup32(0x23, 1, 0x10) + fixup32(0x10, 1, 0x30) + fixup32(0x14, 1, 0x31)
+        image = le.load(bound_program(objects, {1: code_fixups, 2: fixup32(0x0, 1, 0x20)}))
+        found = discover32.discover(image)
+        self.assertIn(CODE_BASE + 0x20, found.instructions)
+        self.assertNotIn(CODE_BASE + 0x10, found.instructions)
+        self.assertIn(CODE_BASE + 0x10, found.rejected)
+
     def test_branch_into_the_middle_of_an_instruction_keeps_both_readings(self):
         code = bytes([0x74, 0x02, 0x66, 0xA9, 0x89, 0xCF, 0xC3])  # je 4; test ax, 0CF89h; ret (4: mov edi, ecx)
         objects = [(CODE_BASE, CODE_FLAGS, code, len(code))]

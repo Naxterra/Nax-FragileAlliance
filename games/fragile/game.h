@@ -1,6 +1,7 @@
 // State shared by the native replacements of Fragile Allegiance's DOS, extender and hardware functions.
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
@@ -56,7 +57,6 @@ public:
     bool keyboard_hooked = false;    // the game's keyboard handler would be installed
     std::deque<uint16_t> typed_keys; // BIOS-style keys (scan code and character) for INT 16h and getch
     Display display;                 // the picture and the input shared with the window thread
-    uint32_t bank[2] = {0, 0};       // the bank shown in each of the two VESA windows
     uint32_t conventional_next = 0x10000;  // next free byte of conventional memory below 640 KB
     bool quit_requested = false;     // the user closed the window
 

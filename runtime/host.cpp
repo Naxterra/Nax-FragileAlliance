@@ -145,8 +145,14 @@ void Host::deliver_interrupt(uint32_t handler) {
     c.eip = eip;
 }
 
-void Host::call_far_handler(uint32_t handler) {
-    const Cpu saved = c;
+void Host::call_far_handler(uint32_t handler, const HandlerRegisters& args) {
+    const Cpu saved = c;  // taken before the arguments are loaded, so the interrupted code gets all of it back
+    c.a.e = args.eax;
+    c.b.e = args.ebx;
+    c.c.e = args.ecx;
+    c.d.e = args.edx;
+    c.si.e = args.esi;
+    c.di.e = args.edi;
     push32(c.sel[CS]);
     push32(kNativeReturn);
     c.iflag = false;
@@ -157,6 +163,11 @@ void Host::call_far_handler(uint32_t handler) {
     const Fpu fpu = c.fpu;
     c = saved;
     c.fpu = fpu;
+}
+
+void Host::probe(uint32_t address) {
+    log("probe %08X: eax %08X ebx %08X ecx %08X edx %08X esi %08X edi %08X ebp %08X esp %08X", address - load_shift,
+        c.a.e, c.b.e, c.c.e, c.d.e, c.si.e, c.di.e, c.bp.e, c.sp.e);
 }
 
 void Host::poll() {

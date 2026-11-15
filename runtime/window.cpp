@@ -102,7 +102,12 @@ void to_game(HWND hwnd, int cx, int cy, int* gx, int* gy) {
     *gy = y < 0 ? 0 : y >= h ? h - 1 : y;
 }
 
-void mouse_button(int button, bool down) {
+// A button message carries the pointer position too; it is passed on first, so the press or release happens
+// exactly where the pointer is even when no move message came before it.
+void mouse_button(HWND hwnd, LPARAM lp, int button, bool down) {
+    InputEvent move{InputEvent::MouseMove};
+    to_game(hwnd, GET_X_LPARAM(lp), GET_Y_LPARAM(lp), &move.x, &move.y);
+    g_state->display->push(move);
     InputEvent e{InputEvent::MouseButton};
     e.button = button;
     e.down = down;
@@ -163,12 +168,12 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         g_state->display->push(e);
         return 0;
     }
-    case WM_LBUTTONDOWN: SetCapture(hwnd); mouse_button(0, true); return 0;
-    case WM_LBUTTONUP: ReleaseCapture(); mouse_button(0, false); return 0;
-    case WM_RBUTTONDOWN: SetCapture(hwnd); mouse_button(1, true); return 0;
-    case WM_RBUTTONUP: ReleaseCapture(); mouse_button(1, false); return 0;
-    case WM_MBUTTONDOWN: mouse_button(2, true); return 0;
-    case WM_MBUTTONUP: mouse_button(2, false); return 0;
+    case WM_LBUTTONDOWN: SetCapture(hwnd); mouse_button(hwnd, lp, 0, true); return 0;
+    case WM_LBUTTONUP: ReleaseCapture(); mouse_button(hwnd, lp, 0, false); return 0;
+    case WM_RBUTTONDOWN: SetCapture(hwnd); mouse_button(hwnd, lp, 1, true); return 0;
+    case WM_RBUTTONUP: ReleaseCapture(); mouse_button(hwnd, lp, 1, false); return 0;
+    case WM_MBUTTONDOWN: mouse_button(hwnd, lp, 2, true); return 0;
+    case WM_MBUTTONUP: mouse_button(hwnd, lp, 2, false); return 0;
     case WM_ERASEBKGND:
         return 1;
     }
@@ -179,7 +184,7 @@ uint32_t expand(uint8_t six) { return uint32_t((six & 63) << 2 | (six & 63) >> 4
 
 }  // namespace
 
-bool run_window(Display& display, const uint8_t* guest_memory, const WindowOptions& options,
+bool run_window(Display& display, const WindowOptions& options,
                 const std::atomic<bool>& finished, std::string* error) {
     State state;
     state.display = &display;
@@ -234,8 +239,9 @@ bool run_window(Display& display, const uint8_t* guest_memory, const WindowOptio
         }
         if (finished) break;
         uint32_t w = display.width, h = display.height;
-        const uint32_t pitch = display.pitch, fb = display.framebuffer;
-        if (!display.graphics || w == 0 || h == 0 || w > 2048 || h > 2048) {
+        const uint32_t pitch = display.pitch;
+        const uint8_t* pixels = display.pixels;
+        if (!display.graphics || !pixels || w == 0 || h == 0 || w > 2048 || h > 2048) {
             w = 640;
             h = 480;
             frame.assign(size_t(w) * h, 0xFF000000u);
@@ -248,16 +254,10 @@ bool run_window(Display& display, const uint8_t* guest_memory, const WindowOptio
             if (!display.enabled) {
                 std::fill(frame.begin(), frame.end(), 0xFF000000u);
             } else {
-                const bool banked = display.banked;
-                const uint32_t bank = display.window_bank, window = display.window;
                 for (uint32_t y = 0; y < h; y++) {
+                    const uint8_t* row = pixels + size_t(y) * pitch;
                     uint32_t* out = &frame[size_t(y) * w];
-                    for (uint32_t x = 0; x < w; x++) {
-                        const uint32_t offset = y * pitch + x;
-                        const uint8_t pixel = banked && (offset >> 16) == bank ? guest_memory[window + (offset & 0xFFFF)]
-                                                                              : guest_memory[uint32_t(fb + offset)];
-                        out[x] = palette[pixel];
-                    }
+                    for (uint32_t x = 0; x < w; x++) out[x] = palette[row[x]];
                 }
             }
         }

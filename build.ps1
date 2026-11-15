@@ -35,7 +35,8 @@ if (-not $GameFolder -or -not (Test-Path (Join-Path $GameFolder "FRAGILE.EXE")))
 $generated = Join-Path $root "generated\fragile"
 $python = (Get-Command python -ErrorAction Stop).Source
 & $python (Join-Path $root "tools\recomp\emit32.py") (Join-Path $GameFolder "FRAGILE.EXE") $generated `
-    --overrides (Join-Path $root "games\fragile\overrides.txt") --shift 0x400000
+    --overrides (Join-Path $root "games\fragile\overrides.txt") --shift 0x400000 `
+    --probes (Join-Path $root "build\probes.txt")
 if ($LASTEXITCODE -ne 0) { throw "Translating FRAGILE.EXE failed." }
 
 $build = Join-Path $root "build\fragile"

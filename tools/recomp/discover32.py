@@ -15,6 +15,7 @@ port input and output with the port number where it can be seen.
 from __future__ import annotations
 
 import collections
+import re
 import struct
 from dataclasses import dataclass, field
 
@@ -194,8 +195,31 @@ def discover(image: le.LeImage, seeds: set[int] | None = None) -> Discovery:
     explore(proven, trace, local, strict=False)
     accept(trace, local)
 
-    for target in sorted(fixup_code_targets(image)):
-        if not in_code(target) or target in result.instructions:
+    # An address that code uses inside a memory operand, such as the base of a jump table kept in the code
+    # object, is data even though a fixup points at it. Such references are collected from the proven code
+    # and from a trial decode of every other fixup target, before any of those targets is accepted.
+    data_references: set[int] = set()
+
+    def note_data_references(instructions) -> None:
+        for ins in instructions:
+            if ins.mnemonic == "lea":
+                continue  # LEA only computes an address, often the address of a handler
+            for inside in re.findall(r"\[([^\]]*)\]", ins.op_str):
+                for value in re.findall(r"0x[0-9a-f]+", inside):
+                    data_references.add(int(value, 16))
+
+    note_data_references(result.instructions.values())
+    candidates = [t for t in sorted(fixup_code_targets(image)) if in_code(t) and t not in result.instructions]
+    for target in candidates:
+        trial, trial_owner = Discovery(), {}
+        if explore([target], trial, trial_owner, strict=True):
+            note_data_references(trial.instructions.values())
+
+    for target in candidates:
+        if target in result.instructions:
+            continue
+        if target in data_references:
+            result.rejected.append(target)
             continue
         if target in owner:
             result.rejected.append(target)

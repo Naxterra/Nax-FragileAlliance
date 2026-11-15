@@ -1,6 +1,6 @@
 # Sends keyboard and mouse input to a running Fragile Allegiance window, for testing the native input path.
 # Steps are separated by spaces. Each is "key:<scan code in hex>", "click:<x>,<y>" in game pixels of a 640x480
-# picture, or "wait:<seconds>".
+# picture, "wait:<seconds>", or "shot" for a screenshot through F12.
 param([string]$Steps)
 $ErrorActionPreference = "Stop"
 Add-Type @"
@@ -19,6 +19,12 @@ foreach ($step in ($Steps -split " " | Where-Object { $_ })) {
     $kind, $value = $step.Split(":", 2)
     switch ($kind) {
         "wait" { Start-Sleep -Milliseconds ([int]([double]$value * 1000)) }
+        "shot" {
+            [NaxInput]::PostMessage($window, 0x0100, [IntPtr]0x7B, [IntPtr](1 -bor (0x58 -shl 16))) | Out-Null
+            Start-Sleep -Milliseconds 80
+            [NaxInput]::PostMessage($window, 0x0101, [IntPtr]0x7B, [IntPtr](1 -bor (0x58 -shl 16) -bor (3 -shl 30))) | Out-Null
+            Start-Sleep -Milliseconds 300
+        }
         "key" {
             $scan = [Convert]::ToInt32($value, 16)
             [NaxInput]::PostMessage($window, 0x0100, [IntPtr]0, [IntPtr](1 -bor ($scan -shl 16))) | Out-Null

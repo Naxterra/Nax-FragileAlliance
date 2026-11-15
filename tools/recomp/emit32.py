@@ -75,6 +75,9 @@ class Emitter:
         # one instruction at the address, which is how an interrupt inside otherwise ordinary code is handled.
         self.overrides = {a: n for a, n in (overrides or {}).items() if not n.startswith("site:")}
         self.sites = {a: n[5:] for a, n in (overrides or {}).items() if n.startswith("site:")}
+        # "probe" logs the registers before the instruction runs and then runs it as usual, for debugging.
+        self.probes = {a for a, n in (overrides or {}).items() if n == "probe"}
+        self.overrides = {a: n for a, n in self.overrides.items() if n != "probe"}
         self.disassembler = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
         self.disassembler.detail = True
         self.selectors = {}
@@ -92,7 +95,8 @@ class Emitter:
         starts = set(self.found.functions)
         starts |= (discover32.fixup_code_targets(self.image) - table_targets)
         starts &= set(addresses)
-        missing = sorted(a for a in list(self.overrides) + list(self.sites) if a not in self.found.instructions)
+        missing = sorted(a for a in list(self.overrides) + list(self.sites) + list(self.probes)
+                         if a not in self.found.instructions)
         if missing:
             raise ValueError("overrides name addresses that are not discovered code: "
                              + ", ".join(f"{a:08x}" for a in missing))
@@ -219,7 +223,8 @@ class Emitter:
         self.check_fixups(insn)
         temps: list[str] = []
         body, terminal = self.body(insn, temps)
-        return " ".join(temps + [body]), terminal
+        probe = [f"m.probe({hexu(insn.address)});"] if insn.address in self.probes else []
+        return " ".join(probe + temps + [body]), terminal
 
     def body(self, insn, temps):
         m = insn.mnemonic.removeprefix("notrack ").removeprefix("bnd ").removeprefix("lock ")
@@ -779,6 +784,7 @@ def main() -> int:
     parser.add_argument("--seeds")
     parser.add_argument("--overrides")
     parser.add_argument("--shift", type=lambda v: int(v, 0), default=0)
+    parser.add_argument("--probes", help="file with link addresses to log the registers at, one per line")
     parser.add_argument("--files", type=int, default=16)
     args = parser.parse_args()
     with open(args.program, "rb") as f:
@@ -786,7 +792,8 @@ def main() -> int:
     image = le.load(source, args.shift)
     found = discover32.discover(image, {s + args.shift for s in read_seeds(args.seeds)})
     emitter = write_program(image, found, os.path.basename(args.program), source, args.output, args.files,
-                            {a + args.shift: n for a, n in read_overrides(args.overrides).items()})
+                            {**{a + args.shift: n for a, n in read_overrides(args.overrides).items()},
+                             **{a + args.shift: "probe" for a in read_seeds(args.probes)}})
     print(f"{len(found.instructions)} instructions in {len(emitter.starts)} chunks, "
           f"{len(emitter.unsupported)} left as run-time stops")
     report = os.path.join(args.output, "unsupported.txt")

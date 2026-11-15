@@ -1,9 +1,8 @@
 // Native replacements of the video module of Fragile Allegiance (original 00070788 to 00070E6E) and of its
 // palette functions. The original detects VESA, sets modes through INT 10h and reaches the 640x480 picture
-// through a 64 KB window at A0000h that shows one 64 KB bank of video memory at a time. Here video memory is a
-// framebuffer in guest memory, and a bank switch swaps the window's contents with the framebuffer, as the
-// video card's memory mapping would. The window thread shows the framebuffer, with the bank that is in the
-// window taken from the window, through Direct3D 12.
+// through 64 KB windows that each show one 64 KB bank of video memory. Here video memory is a Windows memory
+// section: the windows at A0000h and B0000h are views of it, a bank switch maps a different part of it into a
+// window, and the window thread shows the whole section through Direct3D 12.
 #include <algorithm>
 #include <cstring>
 
@@ -12,10 +11,6 @@
 namespace nax::native {
 
 namespace {
-constexpr uint32_t kFramebuffer = 0x00C00000u;
-constexpr uint32_t kFramebufferSize = 0x00200000u;  // room for 1280x1024 with 8 bits per pixel
-constexpr uint32_t kWindow = 0xA0000u, kWindowSize = 0x10000u;
-
 constexpr uint32_t kMode = fa::A(0x124098);           // word: current mode; its high byte marks a VESA mode
 constexpr uint32_t kStartMode = fa::A(0x1240A0);      // word: the mode found at start
 constexpr uint32_t kVideoLevel = fa::A(0x12409A);     // 0 unknown, 1 VGA, 2 VESA
@@ -55,57 +50,49 @@ bool supported(uint32_t mode) {
     return vesa_mode(mode) != nullptr;
 }
 
-// Fills the VESA mode information fields that the rest of the module reads, for one 64 KB window at A0000h
-// that is read and written, with a granularity of 64 KB.
+// Fills the VESA mode information fields that the rest of the module reads: window A for reading and window B
+// for writing, with a granularity of 64 KB. The windows are 4 MB views of video memory (Machine::kWindowA and
+// kWindowB), so the game's blitters, which remap a window only when they come within four lines of its end,
+// copy a whole screen after a single bank switch.
 void describe_mode(Game& g, const ModeSize& m) {
     for (uint32_t i = 0; i < 0x27; i++) g.wr8(kModeInfo + i, 0);
     g.wr16(kModeInfo + 0, 0x009B);  // supported, colour, graphics
-    g.wr8(kModeInfo + 2, 0x07);     // window A exists, can be read and written
+    g.wr8(kModeInfo + 2, 0x03);     // window A exists and can be read
+    g.wr8(kModeInfo + 3, 0x05);     // window B exists and can be written
     g.wr16(kModeInfo + 4, 64);      // granularity in KB
-    g.wr16(kModeInfo + 6, 64);      // window size in KB
+    g.wr16(kModeInfo + 6, uint16_t(Machine::kWindowSize >> 10));  // window size in KB
     g.wr16(kModeInfo + 8, 0xA000);
+    g.wr16(kModeInfo + 10, 0xB000);
     g.wr16(kModeInfo + 16, m.width);  // bytes per line
     g.wr16(kModeInfo + 18, m.width);
     g.wr16(kModeInfo + 20, m.height);
     g.wr8(kModeInfo + 25, 8);
     g.wr8(kModeInfo + 27, 4);  // packed pixel
     g.wr32(kReadWindow, 0);
-    g.wr32(kWriteWindow, 0);
-    g.wr32(kReadBase, kWindow);
-    g.wr32(kWriteBase, kWindow);
+    g.wr32(kWriteWindow, 1);
+    g.wr32(kReadBase, Machine::kWindowA);
+    g.wr32(kWriteBase, Machine::kWindowB);
     g.wr32(kBankCache, 0xFFFFFFFFu);
     g.wr32(kWindowFunction, 0);
     g.wr32(kSetBank, kSetBankFunction);
     g.wr32(kGetBank, kGetBankFunction);
     g.wr32(kBankShift, 16);
-    g.bank[0] = g.bank[1] = 0;
-    std::memset(g.mem + kFramebuffer, 0, kFramebufferSize);
-    std::memset(g.mem + kWindow, 0, kWindowSize);
-    g.display.window = kWindow;
-    g.display.window_bank = 0;
-}
-
-// Shows bank in the window: the window's contents go back to the framebuffer and the new bank comes in.
-void switch_bank(Game& g, uint32_t bank) {
-    if (bank == g.bank[0] || (uint64_t(bank) + 1) * kWindowSize > kFramebufferSize) return;
-    std::memcpy(g.mem + kFramebuffer + g.bank[0] * kWindowSize, g.mem + kWindow, kWindowSize);
-    std::memcpy(g.mem + kWindow, g.mem + kFramebuffer + bank * kWindowSize, kWindowSize);
-    g.bank[0] = g.bank[1] = bank;
-    g.display.window_bank = bank;
+    g.map_window(0, 0);
+    g.map_window(1, 0);
+    std::memset(g.vram, 0, Machine::kVideoMemory);
 }
 
 void show_mode(Game& g, uint32_t mode) {
     Display& d = g.display;
     if (const ModeSize* m = vesa_mode(mode)) {
-        d.framebuffer = kFramebuffer;
-        d.banked = true;
+        d.pixels = g.vram;
         d.width = m->width;
         d.height = m->height;
         d.pitch = m->width;
         d.graphics = true;
     } else if ((mode & 0x7F) == 0x13) {
-        d.framebuffer = 0xA0000;
-        d.banked = false;
+        // Mode 13h is drawn into ordinary memory at A0000h.
+        d.pixels = g.mem + 0xA0000;
         d.width = 320;
         d.height = 200;
         d.pitch = 320;
@@ -120,7 +107,6 @@ void show_mode(Game& g, uint32_t mode) {
 // Original 00070788: remembers the start mode, detects VESA and prepares the screen layout.
 void video_init(Machine& m) {
     Game& g = game(m);
-    if (!g.commit(kFramebuffer, kFramebufferSize)) g.stop("Committing the framebuffer failed.");
     g.wr16(kStartMode, 3);
     g.wr16(kMode, 3);
     g.wr8(kVideoLevel, 2);
@@ -177,19 +163,19 @@ void video_mode_info(Machine& m) {
     g.ret();
 }
 
-// Originals 00070E14 and 00070DD3: show bank AX in window BL. There is one window for reading and writing.
+// Originals 00070E14 and 00070DD3: show bank AX in window BL. Only the window's mapping changes.
 void video_set_bank(Machine& m) {
     Game& g = game(m);
     const uint32_t bank = g.c.a.x;
     g.wr16(kBankArgument, uint16_t(bank));
-    switch_bank(g, bank);
+    g.map_window(g.c.b.l & 1, bank);
     g.ret();
 }
 
 // Originals 00070E42 and 00070DF4: return the bank of window BL in EAX.
 void video_get_bank(Machine& m) {
     Game& g = game(m);
-    g.c.a.e = g.bank[0];
+    g.c.a.e = g.window_bank(g.c.b.l & 1);
     g.ret();
 }
 

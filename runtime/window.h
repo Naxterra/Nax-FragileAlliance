@@ -23,7 +23,7 @@ struct WindowOptions {
 
 // Runs the window until the user closes it or finished becomes true. Must be called on the main thread.
 // Returns false with *error set when the window or Direct3D 12 cannot be created.
-bool run_window(Display& display, const uint8_t* guest_memory, const WindowOptions& options,
+bool run_window(Display& display, const WindowOptions& options,
                 const std::atomic<bool>& finished, std::string* error);
 
 }  // namespace nax

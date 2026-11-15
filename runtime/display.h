@@ -21,11 +21,10 @@ struct InputEvent {
 };
 
 struct Display {
-    // Picture: width x height bytes at guest address framebuffer, pitch bytes per line, 8-bit indexed.
-    std::atomic<uint32_t> framebuffer{0}, width{0}, height{0}, pitch{0};
-    // In banked modes one 64 KB bank of the framebuffer lives in the window at that time.
-    std::atomic<bool> banked{false};
-    std::atomic<uint32_t> window{0}, window_bank{0};
+    // Picture: width x height bytes at pixels, pitch bytes per line, 8-bit indexed. pixels points into the
+    // host's view of video memory.
+    std::atomic<const uint8_t*> pixels{nullptr};
+    std::atomic<uint32_t> width{0}, height{0}, pitch{0};
     std::atomic<bool> graphics{false};  // false while the game is in a text mode
     std::atomic<bool> enabled{true};    // the game can blank the screen while it changes modes
     std::atomic<uint8_t> palette[256][3]{};  // 6 bits per component, as the VGA DAC holds them

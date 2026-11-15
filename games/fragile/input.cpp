@@ -36,13 +36,14 @@ void Game::keyboard_byte(uint8_t byte) {
 // game's pointer never drifts away from it.
 void Game::mouse_event(uint32_t mask) {
     if (!mouse_handler) return;
-    c.a.e = mask;
-    c.b.e = uint32_t(mouse_buttons);
-    c.c.e = uint32_t(mouse_x & 0x3FFF);
-    c.d.e = uint32_t(mouse_y & 0x3FFF);
-    c.si.e = mickeys_x;
-    c.di.e = mickeys_y;
-    call_far_handler(mouse_handler);
+    HandlerRegisters args;
+    args.eax = mask;
+    args.ebx = uint32_t(mouse_buttons);
+    args.ecx = uint32_t(mouse_x & 0x3FFF);
+    args.edx = uint32_t(mouse_y & 0x3FFF);
+    args.esi = mickeys_x;
+    args.edi = mickeys_y;
+    call_far_handler(mouse_handler, args);
     const uint32_t w = display.width ? display.width.load() : 640, h = display.height ? display.height.load() : 480;
     wr32(fa::kMouseUnitsX, (uint32_t(mouse_x) * 65536u + w - 1) / w);
     wr32(fa::kMouseUnitsY, (uint32_t(mouse_y) * 65536u + h - 1) / h);

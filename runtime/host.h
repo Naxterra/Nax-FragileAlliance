@@ -71,11 +71,16 @@ public:
     // Calls an original interrupt handler as the processor would: flags, code selector and return address on
     // the stack, interrupts disabled until the handler's IRETD.
     void deliver_interrupt(uint32_t handler);
-    // Calls an original handler that a driver would have called far (it ends with RETF), with the registers
-    // set by the caller, and then restores every register, as a driver callback from an interrupt does.
-    void call_far_handler(uint32_t handler);
+    // Calls an original handler that a driver would have called far (it ends with RETF) with these registers,
+    // and then restores every register to what it was before the call, as a driver callback from an
+    // interrupt does.
+    struct HandlerRegisters {
+        uint32_t eax = 0, ebx = 0, ecx = 0, edx = 0, esi = 0, edi = 0;
+    };
+    void call_far_handler(uint32_t handler, const HandlerRegisters& args);
     void poll() override;
     void halt() override;
+    void probe(uint32_t address) override;
 
     // Makes a selector whose base is a block of conventional memory, as DPMI 0100h returns one.
     uint16_t dos_selector(uint32_t base);

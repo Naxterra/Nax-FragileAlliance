@@ -113,12 +113,24 @@ public:
 
     Cpu c;
     uint8_t* mem = nullptr;  // base of the reserved guest address space
+    // Video memory. The guest sees it through two windows at 8 MB and 12 MB, each a 4 MB view that starts at
+    // a 64 KB bank of it, as a VESA card's bank windows would, but large enough that code running past the end
+    // of a bank needs no further switch. vram is the host's own view of all of it.
+    static constexpr uint32_t kWindowA = 0x00800000, kWindowB = 0x00C00000, kWindowSize = 0x400000;
+    static constexpr uint32_t kBankSize = 0x10000, kVideoMemory = 0x400000;
+    static constexpr uint64_t kVideoSection = 2ull * kVideoMemory;  // views never run past its end
+    uint8_t* vram = nullptr;
+    // Shows bank in window 0 (A) or 1 (B). Returns false when the bank lies outside video memory.
+    bool map_window(int window, uint32_t bank);
+    uint32_t window_bank(int window) const { return window_bank_[window & 1]; }
     int budget = 0;          // translated code calls poll() when this runs below zero
     uint32_t load_shift = 0; // how far the program was moved above its link addresses; messages name link addresses
     // The last addresses the dispatcher entered, newest last, for messages about a stop.
     uint32_t history[16]{};
     unsigned history_next = 0;
     std::string recent_path() const;
+    // Called before an instruction marked as a probe in the overrides file; the host logs the registers.
+    virtual void probe(uint32_t address) { (void)address; }
 
     // Memory. Every 32-bit address lies inside the reservation; touching a page that was never committed
     // is reported by the fault handler with the guest address.
@@ -189,6 +201,10 @@ public:
 
 protected:
     const ProgramInfo* program_ = nullptr;
+
+private:
+    void* video_section_ = nullptr;
+    uint32_t window_bank_[2] = {0, 0};
 };
 
 }  // namespace nax
