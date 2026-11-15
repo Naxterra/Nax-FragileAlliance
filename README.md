@@ -6,7 +6,7 @@ The repository contains only the translator, the runtime and the native replacem
 
 ## Status
 
-The game starts natively on Windows 11, shows its title screen and menus in a Direct3D 12 window and can be played: a preset game such as "Beginner's Luck" starts and runs on the strategic map. Sound and the two intro movies are not replaced yet, and only the start of a game has been tried so far.
+The game starts natively on Windows 11, shows its title screen and menus in a Direct3D 12 window, plays its music, speech and sound effects through XAudio2 and can be played: a preset game such as "Beginner's Luck" starts and runs on the strategic map. The two intro movies are not replaced yet, and only the start of a game has been tried so far.
 
 | Part | State |
 |---|---|
@@ -16,7 +16,7 @@ The game starts natively on Windows 11, shows its title screen and menus in a Di
 | Graphics | Native. The picture is shown through Direct3D 12 with three filters (F11), in a window or borderless fullscreen (Alt+Enter), and F12 saves a screenshot. |
 | Keyboard and mouse | Native. Windows messages feed the game's own key table and mouse handler. |
 | Network | Reported as absent, so the game runs as a single-player game. |
-| Sound | Not replaced yet. The game runs without sound. |
+| Sound | Native. Music, speech and sound effects are mixed in software and played through XAudio2. |
 | Intro movies (GDV) | Not replaced yet. They are skipped. |
 
 ## How the game runs on Windows
@@ -31,13 +31,13 @@ There is no DOS, no DOS extender and no emulated PC hardware. Every place where 
 | Clock and timer | The game's timer interrupt handler is called at its own rate from the Windows performance counter. |
 | Graphics | Video memory is a Windows memory section. The game's read and write windows are 4 MB views of it, and a bank switch maps a different part of the section into a window, as a VESA card's memory mapping did, so nothing is copied. The window thread shows the section through Direct3D 12. Palette writes go to the display directly. |
 | Keyboard and mouse | Windows key messages are fed into the game's key table the way its keyboard interrupt handler did, and the game's mouse handler is called for every mouse message, with the game pointer kept exactly under the Windows pointer. |
+| Sound | The game's calls to the HMI sound library start, continue, stop and fade samples in a software mixer, which reads the sample data straight from the game's memory and resamples it to 44.1 kHz with interpolation. The game streams music and speech from its WAV files in parts and hands over each next part from a callback, which is called at the end of every part as the Sound Blaster driver did. The mixer runs on the game's own 120 Hz sound tick and keeps about 60 ms of sound queued at XAudio2. |
 | Memory layout | The program is loaded 4 MB above its link addresses, as DOS/4GW loaded it, so the first 640 KB stay free for the game's fixed data. |
 
 ## What the game still needs
 
 | Area | What the original program uses |
 |---|---|
-| Sound | The HMI sound library with its driver `HMIDRV.386`, configured for a Sound Blaster at 220h. |
 | Movies | The GDV movie player draws in VGA mode X, one plane at a time. |
 | Network | IPX, NetBIOS and a serial-port handler. Multiplayer is not planned for now. |
 

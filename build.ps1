@@ -74,7 +74,7 @@ if ($stale.Count -gt 0) {
 $exe = Join-Path $build "FragileAllegiance.exe"
 $linkObjects = ($handwritten + $translated) | ForEach-Object { Join-Path $objects ($_.BaseName + ".obj") }
 $debug = if ($Configuration -eq "Debug") { @("/DEBUG") } else { @() }
-& link.exe /nologo /OUT:$exe /SUBSYSTEM:WINDOWS /STACK:8388608 @debug @linkObjects advapi32.lib user32.lib shell32.lib ole32.lib d3d12.lib dxgi.lib d3dcompiler.lib
+& link.exe /nologo /OUT:$exe /SUBSYSTEM:WINDOWS /STACK:8388608 @debug @linkObjects advapi32.lib user32.lib shell32.lib ole32.lib d3d12.lib dxgi.lib d3dcompiler.lib xaudio2.lib
 if ($LASTEXITCODE -ne 0) { throw "Linking failed." }
 Copy-Item (Join-Path $generated "image.bin") (Join-Path $build "image.bin") -Force
 Write-Host "Built $exe ($($stale.Count) sources compiled)"

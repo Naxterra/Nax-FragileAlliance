@@ -61,6 +61,19 @@
 00091980 int386x_dpmi              # DPMI 0300h for IPX and NetBIOS, DPMI 0100h and 0101h
 000787b6 sound_digital_init_system    # HMI sosDIGIInitSystem: loads HMIDRV.386
 0007882f sound_digital_uninit_system  # HMI sosDIGIUnInitSystem
+0007886f sound_digital_init_driver    # HMI sosDIGIInitDriver: loads the card's driver and programs the card
+0007912f sound_digital_uninit_driver  # HMI sosDIGIUnInitDriver
+000795e9 sound_detect_init            # HMI sosDIGIDetectInit: loads HMIDET.386
+00079a41 sound_detect_caps            # HMI sosDIGIDetectGetCaps
+00079733 sound_detect_uninit          # HMI sosDIGIDetectUnInit
+00073c82 sound_start_sample           # HMI sosDIGIStartSample
+0007429b sound_stop_sample            # HMI sosDIGIStopSample
+00074349 sound_continue_sample        # HMI sosDIGIContinueSample
+00074716 sound_set_sample_volume      # HMI sosDIGISetSampleVolume
+000749b9 sound_set_pan                # HMI sosDIGISetPanLocation
+00074d0e sound_set_master_volume      # HMI sosDIGISetMasterVolume
+0007a2d2 sound_samples_playing        # HMI: number of samples still playing
+0006bf28 site:sound_service           # the game's 120 Hz event: far call of the driver's mixing service
 0008248c site:dos_file_call    # movie player: DOS 42h
 000824b5 site:dos_file_call    # movie player: DOS 3Dh
 000824e3 site:dos_file_call    # movie player: DOS 3Fh

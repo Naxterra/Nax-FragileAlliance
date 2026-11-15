@@ -7,9 +7,11 @@
 #include <filesystem>
 #include <string>
 
+#include "runtime/audio.h"
 #include "runtime/display.h"
 #include "runtime/files.h"
 #include "runtime/host.h"
+#include "runtime/mixer.h"
 
 namespace nax {
 
@@ -69,6 +71,22 @@ public:
     int mouse_motion_x = 0, mouse_motion_y = 0;  // mickeys not yet read
     uint32_t mouse_handler = 0;      // the game's mouse event handler, called far like a driver callback
     uint16_t mickeys_x = 0, mickeys_y = 0;  // the driver's running motion counters
+
+    // Sound, which replaces the HMI sound library and its Sound Blaster driver.
+    static constexpr int kSoundVoices = 32;
+    static constexpr int kSoundRate = 44100;
+    AudioOutput audio;
+    Mixer mixer{kSoundVoices, kSoundRate};
+    struct SampleCallback {
+        uint32_t offset = 0;      // the game's far callback for the end of a buffer, or 0
+        uint16_t selector = 0;
+        bool pending = false;     // a buffer handed over while the previous one still plays
+        uint32_t pending_address = 0, pending_bytes = 0;
+    };
+    SampleCallback sample_callbacks[kSoundVoices];
+    int sound_source_rate = 22050;  // the rate the game set up the driver for
+    bool sound_mixing = false;
+    int sound_driver_opens = 0;     // sosDIGIInitDriver calls not yet undone
 
     // Takes the input that the window thread collected; called from poll().
     void take_input();
