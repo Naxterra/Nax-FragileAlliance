@@ -93,6 +93,9 @@ public:
     TexturePack textures;
     int overlay_brightness = -1000;  // sum of all palette components when it last changed noticeably
     int overlay_palette_age = 0;     // sprite updates since then
+    std::vector<Overlay> overlays_now;  // the enhanced pictures after the last sprite update
+    Display::Frame frame_spare;         // reused for the next frame handed to the window thread
+    int64_t frame_time = 0;             // performance counter when the last frame was handed over
 
     // Takes the input that the window thread collected; called from poll().
     void take_input();
@@ -116,6 +119,9 @@ inline Game& game(Machine& m) { return static_cast<Game&>(m); }
 
 namespace native {
 void publish_overlays(Game& g);
+// Hands the picture with its palette and enhanced pictures to the window thread, at most 250 times a second
+// and only while the game is not changing the screen.
+void publish_frame(Game& g);
 }
 
 }  // namespace nax

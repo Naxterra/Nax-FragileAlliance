@@ -51,17 +51,32 @@ struct Display {
     std::atomic<bool> enabled{true};    // the game can blank the screen while it changes modes
     std::atomic<uint8_t> palette[256][3]{};  // 6 bits per component, as the VGA DAC holds them
 
-    // Enhanced pictures in drawing order, replaced as a whole by the game thread after each update of the
-    // game's sprites. The window thread copies the list under the lock.
-    std::mutex overlay_mutex;
-    std::vector<Overlay> overlays;
-    void set_overlays(std::vector<Overlay>&& list) {
-        std::lock_guard<std::mutex> lock(overlay_mutex);
-        overlays.swap(list);
+    // A complete picture as the game thread hands it to the window thread: the pixels, the palette and the
+    // enhanced pictures of the same moment. Reading video memory while the game draws into it showed half
+    // drawn pictures, in which the enhanced pictures and the AI filter fell back to the original for single
+    // frames and blinked; a frame is only taken when the game is not changing the screen.
+    struct Frame {
+        uint32_t width = 0, height = 0;
+        bool shown = false;            // false while the screen is blank or in a text mode
+        std::vector<uint8_t> pixels;   // width x height palette indices
+        uint8_t palette[256][3]{};     // 6 bits per component
+        std::vector<Overlay> overlays; // enhanced pictures in drawing order
+        uint64_t serial = 0;           // counts the frames handed over
+    };
+    std::mutex frame_mutex;
+    Frame frame;
+    // Hands over f; f receives the previous frame, so its buffers can be used again.
+    void publish(Frame& f) {
+        std::lock_guard<std::mutex> lock(frame_mutex);
+        f.serial = frame.serial + 1;
+        std::swap(frame, f);
     }
-    std::vector<Overlay> copy_overlays() {
-        std::lock_guard<std::mutex> lock(overlay_mutex);
-        return overlays;
+    // Copies the newest frame into out when it is not the one numbered seen.
+    bool take(Frame* out, uint64_t seen) {
+        std::lock_guard<std::mutex> lock(frame_mutex);
+        if (frame.serial == seen) return false;
+        *out = frame;
+        return true;
     }
 
     // Input, filled by the window thread and drained by the game thread.

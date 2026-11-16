@@ -103,6 +103,7 @@ void Game::take_input() {
 
 void Game::poll() {
     Host::poll();
+    native::publish_frame(*this);
     take_input();
     if (display.quit && !quit_requested) {
         quit_requested = true;

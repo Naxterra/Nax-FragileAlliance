@@ -161,7 +161,32 @@ void publish_overlays(Game& g) {
         };
         if (auto texture = g.textures.get(s.key, decode, palette, settled)) list.push_back(Overlay{texture, s.x, s.y});
     }
-    g.display.set_overlays(std::move(list));
+    g.overlays_now = std::move(list);
+}
+
+void publish_frame(Game& g) {
+    LARGE_INTEGER now, frequency;
+    QueryPerformanceCounter(&now);
+    QueryPerformanceFrequency(&frequency);
+    if (now.QuadPart - g.frame_time < frequency.QuadPart / 250) return;
+    if (g.rd8(kScreenBusy) != 0) return;  // the sprite engine is copying to the screen
+    g.frame_time = now.QuadPart;
+    Display::Frame& f = g.frame_spare;
+    const uint8_t* screen = g.display.pixels;
+    const uint32_t w = g.display.width, h = g.display.height, pitch = g.display.pitch;
+    f.shown = g.display.graphics && g.display.enabled && screen && w > 0 && h > 0 && w <= 2048 && h <= 2048 && pitch >= w;
+    if (f.shown) {
+        f.width = w;
+        f.height = h;
+        f.pixels.resize(size_t(w) * h);
+        for (uint32_t y = 0; y < h; y++) std::memcpy(&f.pixels[size_t(y) * w], screen + size_t(y) * pitch, w);
+        f.overlays = g.overlays_now;
+    } else {
+        f.overlays.clear();
+    }
+    for (int i = 0; i < 256; i++)
+        for (int k = 0; k < 3; k++) f.palette[i][k] = g.display.palette[i][k];
+    g.display.publish(f);
 }
 
 // Replaces "dec byte ptr [001242CEh]" at the end of the sprite engine's timer routine (00080986), which runs

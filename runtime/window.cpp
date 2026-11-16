@@ -241,9 +241,11 @@ bool run_window(Display& display, const WindowOptions& options,
     update_title(hwnd);
     if (options.fullscreen) set_fullscreen(hwnd, true);
 
-    std::vector<uint32_t> frame;
+    std::vector<uint32_t> frame(size_t(640) * 480, 0xFF000000u);
+    uint32_t w = 640, h = 480;
     uint32_t palette[256] = {};
-    const std::vector<Overlay> no_overlays;
+    Display::Frame shown;
+    uint64_t seen = 0;
     bool running = true;
     const ULONGLONG started = GetTickCount64();
     bool timed_shot_done = options.shot_after <= 0;
@@ -256,26 +258,21 @@ bool run_window(Display& display, const WindowOptions& options,
             DispatchMessageW(&msg);
         }
         if (finished) break;
-        uint32_t w = display.width, h = display.height;
-        const uint32_t pitch = display.pitch;
-        const uint8_t* pixels = display.pixels;
-        if (!display.graphics || !pixels || w == 0 || h == 0 || w > 2048 || h > 2048) {
-            w = 640;
-            h = 480;
-            frame.assign(size_t(w) * h, 0xFF000000u);
-        } else {
+        // A new frame from the game thread replaces the picture; otherwise the last one is shown again.
+        if (display.take(&shown, seen)) {
+            seen = shown.serial;
             for (int i = 0; i < 256; i++)
-                palette[i] = expand(display.palette[i][0]) | (expand(display.palette[i][1]) << 8) |
-                             (expand(display.palette[i][2]) << 16) | 0xFF000000u;
-            frame.resize(size_t(w) * h);
-            if (!display.enabled) {
-                std::fill(frame.begin(), frame.end(), 0xFF000000u);
+                palette[i] = expand(shown.palette[i][0]) | (expand(shown.palette[i][1]) << 8) |
+                             (expand(shown.palette[i][2]) << 16) | 0xFF000000u;
+            if (!shown.shown) {
+                w = 640;
+                h = 480;
+                frame.assign(size_t(w) * h, 0xFF000000u);
             } else {
-                for (uint32_t y = 0; y < h; y++) {
-                    const uint8_t* row = pixels + size_t(y) * pitch;
-                    uint32_t* out = &frame[size_t(y) * w];
-                    for (uint32_t x = 0; x < w; x++) out[x] = palette[row[x]];
-                }
+                w = shown.width;
+                h = shown.height;
+                frame.resize(size_t(w) * h);
+                for (size_t i = 0; i < frame.size(); i++) frame[i] = palette[shown.pixels[i]];
             }
         }
         if (!timed_shot_done && double(GetTickCount64() - started) / 1000.0 >= options.shot_after) {
@@ -291,10 +288,9 @@ bool run_window(Display& display, const WindowOptions& options,
                      now.wMinute, now.wSecond, shot_number++);
             save_bmp(options.shots / name, frame.data(), w, h);
         }
-        // Enhanced textures need the picture as the game drew it, so they are left out while the screen is
-        // blanked or in a text mode.
-        const bool overlays = state.textures && display.graphics && display.enabled && pixels;
-        presenter.draw(frame.data(), w, h, state.filter, palette, overlays ? display.copy_overlays() : no_overlays);
+        // A blank or text screen carries no enhanced pictures.
+        static const std::vector<Overlay> none;
+        presenter.draw(frame.data(), w, h, state.filter, palette, state.textures && shown.shown ? shown.overlays : none);
     }
     DestroyWindow(hwnd);
     g_state = nullptr;
