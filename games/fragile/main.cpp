@@ -9,6 +9,7 @@
 #include <string>
 
 #include "games/fragile/game.h"
+#include "runtime/presenter.h"
 #include "runtime/window.h"
 
 namespace nax {
@@ -66,14 +67,15 @@ DWORD WINAPI game_thread(void* parameter) {
     return 0;
 }
 
-int read_filter(const std::filesystem::path& settings, bool* fullscreen) {
-    int filter = 0;
+int read_filter(const std::filesystem::path& settings, bool* fullscreen, bool* textures) {
+    int filter = nax::Presenter::kAiFilter;  // AI upscaling unless the player chose another filter
     if (FILE* f = _wfopen(settings.c_str(), L"r")) {
         char line[64];
         while (std::fgets(line, sizeof line, f)) {
             int value = 0;
             if (std::sscanf(line, "filter=%d", &value) == 1) filter = value;
             if (std::sscanf(line, "fullscreen=%d", &value) == 1) *fullscreen = value != 0;
+            if (std::sscanf(line, "textures=%d", &value) == 1) *textures = value != 0;
         }
         std::fclose(f);
     }
@@ -92,13 +94,14 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     std::filesystem::path data;
     std::string arguments;
-    bool fullscreen = false, windowed = false;
+    bool fullscreen = false, windowed = false, dump_textures = false;
     double shot_after = 0;
     for (int i = 1; i < argc; i++) {
         const std::wstring arg = argv[i];
         if (arg == L"--data" && i + 1 < argc) data = argv[++i];
         else if (arg == L"--fullscreen") fullscreen = true;
         else if (arg == L"--window") windowed = true;
+        else if (arg == L"--dump-textures") dump_textures = true;
         else if (arg == L"--screenshot-after" && i + 1 < argc) shot_after = _wtof(argv[++i]);
         else {
             if (!arguments.empty()) arguments += ' ';
@@ -117,6 +120,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     game.user_dir = user_folder();
     game.arguments = arguments;
     game.set_log(game.user_dir / L"runtime.log");
+    // Enhanced textures come from the pack folder; --dump-textures saves the originals for making a pack.
+    game.textures.open(game.user_dir / L"textures" / L"pack", game.user_dir / L"textures" / L"dump", dump_textures);
     // Drive C: is the game folder as the GOG release sets it up for DOSBox, with GOG's cloud save folder and
     // then the user folder on top. Drive D: is the CD image.
     game.files.mount_folder('C', game.user_dir / L"C", {data / L"cloud_saves", data});
@@ -138,7 +143,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     options.shots = game.user_dir / L"shots";
     options.shot_after = shot_after;
     bool remembered_fullscreen = false;
-    options.filter = read_filter(options.settings, &remembered_fullscreen);
+    options.filter = read_filter(options.settings, &remembered_fullscreen, &options.textures);
+    // The AI filter uses the compact model that Upscayl installs; it is read from there and never copied.
+    if (const wchar_t* programs = _wgetenv(L"ProgramFiles"))
+        options.ai_model = std::filesystem::path(programs) / L"Upscayl" / L"resources" / L"models" / L"upscayl-lite-4x";
     options.fullscreen = windowed ? false : (fullscreen || remembered_fullscreen);
 
     Run run;

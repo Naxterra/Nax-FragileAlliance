@@ -25,7 +25,7 @@ class MixerTests(unittest.TestCase):
         command = (f". '{os.path.join(ROOT, 'tools', 'vsenv.ps1')}' *> $null; "
                    f"cl.exe /nologo /std:c++20 /EHsc /MT /W3 /Od /DNOMINMAX "
                    f"'/I{ROOT}' '/Fo{FOLDER}\\\\' '/Fe{EXE}' {quoted}; exit $LASTEXITCODE")
-        built = subprocess.run(["pwsh", "-NoProfile", "-Command", command], capture_output=True, text=True)
+        built = subprocess.run(["pwsh", "-NoProfile", "-Command", command], capture_output=True, text=True, errors="replace")
         if built.returncode != 0:
             raise AssertionError(f"compiling the mixer tests failed:\n{built.stdout}\n{built.stderr}")
 

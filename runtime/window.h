@@ -16,8 +16,10 @@ struct WindowOptions {
     std::wstring title;
     int filter = 0;           // 0 sharp pixels, 1 smooth edges, 2 CRT
     bool fullscreen = false;  // borderless fullscreen on the current monitor
+    bool textures = true;     // draw enhanced textures where the texture pack has them
     std::filesystem::path settings;  // where the last filter is remembered
     std::filesystem::path shots;     // where F12 saves screenshots of the game picture
+    std::filesystem::path ai_model;  // the AI upscaling model without extension, see Presenter::init
     double shot_after = 0;           // with a value above 0, one screenshot is saved after that many seconds
 };
 

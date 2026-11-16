@@ -12,6 +12,7 @@
 #include "runtime/files.h"
 #include "runtime/host.h"
 #include "runtime/mixer.h"
+#include "runtime/textures.h"
 
 namespace nax {
 
@@ -88,6 +89,11 @@ public:
     bool sound_mixing = false;
     int sound_driver_opens = 0;     // sosDIGIInitDriver calls not yet undone
 
+    // Enhanced textures for the sprites, see scene.cpp.
+    TexturePack textures;
+    int overlay_brightness = -1000;  // sum of all palette components when it last changed noticeably
+    int overlay_palette_age = 0;     // sprite updates since then
+
     // Takes the input that the window thread collected; called from poll().
     void take_input();
     // Feeds one byte from the keyboard controller into the game's key table, as its handler at 00068581 does.
@@ -107,5 +113,9 @@ private:
 };
 
 inline Game& game(Machine& m) { return static_cast<Game&>(m); }
+
+namespace native {
+void publish_overlays(Game& g);
+}
 
 }  // namespace nax

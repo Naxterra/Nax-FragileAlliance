@@ -11,6 +11,17 @@
 
 namespace nax {
 
+// A build with NAX_TRACE_WRITES counts, for each translated function, the bytes it writes into one address
+// range that NAX_TRACE_WRITES=lo-hi (hexadecimal link addresses) names at run time. It is used to find the
+// routines that draw into a picture buffer. Normal builds compile the hooks away.
+#ifdef NAX_TRACE_WRITES
+#define NAX_TRACE_WRITE(m, address, bytes)     do { if (uint32_t(address) < (m).trace_hi && uint32_t(address) + uint32_t(bytes) > (m).trace_lo) (m).trace_write(uint32_t(address)); } while (0)
+#define NAX_TRACE_FUNCTION(m) ::nax::TraceScope trace_scope_(m, (m).c.eip)
+#else
+#define NAX_TRACE_WRITE(m, address, bytes) ((void)0)
+#define NAX_TRACE_FUNCTION(m) ((void)0)
+#endif
+
 class Machine;
 
 union Reg32 {
@@ -138,10 +149,16 @@ public:
     uint16_t rd16(uint32_t a) const { uint16_t v; std::memcpy(&v, mem + a, 2); return v; }
     uint32_t rd32(uint32_t a) const { uint32_t v; std::memcpy(&v, mem + a, 4); return v; }
     uint64_t rd64(uint32_t a) const { uint64_t v; std::memcpy(&v, mem + a, 8); return v; }
-    void wr8(uint32_t a, uint8_t v) { mem[a] = v; }
-    void wr16(uint32_t a, uint16_t v) { std::memcpy(mem + a, &v, 2); }
-    void wr32(uint32_t a, uint32_t v) { std::memcpy(mem + a, &v, 4); }
-    void wr64(uint32_t a, uint64_t v) { std::memcpy(mem + a, &v, 8); }
+    void wr8(uint32_t a, uint8_t v) { NAX_TRACE_WRITE(*this, a, 1); mem[a] = v; }
+    void wr16(uint32_t a, uint16_t v) { NAX_TRACE_WRITE(*this, a, 2); std::memcpy(mem + a, &v, 2); }
+    void wr32(uint32_t a, uint32_t v) { NAX_TRACE_WRITE(*this, a, 4); std::memcpy(mem + a, &v, 4); }
+    void wr64(uint32_t a, uint64_t v) { NAX_TRACE_WRITE(*this, a, 8); std::memcpy(mem + a, &v, 8); }
+#ifdef NAX_TRACE_WRITES
+    uint32_t trace_function = 0, trace_caller = 0;  // entry addresses of the running function and its caller
+    uint32_t trace_lo = 0, trace_hi = 0;
+    void trace_write(uint32_t address);
+    void trace_report();
+#endif
 
     // Stack. The stack segment of a flat program has base 0, but its base is still honoured.
     void push32(uint32_t v) { c.sp.e -= 4; wr32(c.base[SS] + c.sp.e, v); }
@@ -206,5 +223,17 @@ private:
     void* video_section_ = nullptr;
     uint32_t window_bank_[2] = {0, 0};
 };
+
+#ifdef NAX_TRACE_WRITES
+struct TraceScope {
+    Machine& m;
+    uint32_t saved_function, saved_caller;
+    TraceScope(Machine& machine, uint32_t entry) : m(machine), saved_function(m.trace_function), saved_caller(m.trace_caller) {
+        m.trace_caller = m.trace_function;
+        m.trace_function = entry;
+    }
+    ~TraceScope() { m.trace_function = saved_function; m.trace_caller = saved_caller; }
+};
+#endif
 
 }  // namespace nax

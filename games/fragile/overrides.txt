@@ -85,3 +85,4 @@
 00084501 site:dos_file_call    # movie player: DOS 42h
 00085c5a site:dos_file_call    # movie player: DOS 56h
 00072040 play_movie                # GDV movie player in VGA mode X
+00080986 site:scene_shown         # sprite engine: the screen shows its update, see scene.cpp

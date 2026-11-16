@@ -321,6 +321,7 @@ inline void movs(Machine& m, int src, int mode) {
     Cpu& c = m.c;
     constexpr int n = B / 8;
     const int step = c.df ? -n : n;
+    NAX_TRACE_WRITE(m, c.base[ES] + c.di.e, mode == 0 ? n : n * c.c.e);
     if (mode == 0) {
         std::memmove(m.mem + uint32_t(c.base[ES] + c.di.e), m.mem + uint32_t(c.base[src] + c.si.e), n);
         c.si.e += step;
@@ -353,6 +354,7 @@ inline void stos(Machine& m, int mode) {
     constexpr int n = B / 8;
     const int step = c.df ? -n : n;
     const uint32_t value = c.a.e;
+    NAX_TRACE_WRITE(m, c.base[ES] + c.di.e, mode == 0 ? n : n * c.c.e);
     auto one = [&] {
         std::memcpy(m.mem + uint32_t(c.base[ES] + c.di.e), &value, n);
         c.di.e += step;

@@ -17,6 +17,7 @@ struct State {
     Presenter* presenter = nullptr;
     int filter = 0;
     bool fullscreen = false;
+    bool textures = true;  // enhanced textures are drawn where the texture pack has them
     WINDOWPLACEMENT placement{sizeof(WINDOWPLACEMENT)};
     std::filesystem::path settings;
     std::wstring title;
@@ -57,17 +58,23 @@ bool save_bmp(const std::filesystem::path& file, const uint32_t* rgba, uint32_t 
 
 bool g_shot_requested = false;
 
-const wchar_t* const kFilterNames[Presenter::kFilterCount] = {L"sharp pixels", L"smooth edges", L"CRT"};
+const wchar_t* const kFilterNames[Presenter::kFilterCount] = {L"sharp pixels", L"smooth edges", L"CRT", L"AI upscaling"};
 
 void update_title(HWND hwnd) {
-    const std::wstring title = g_state->title + L" - " + kFilterNames[g_state->filter] + L" (F11 changes the filter)";
+    std::wstring filter = kFilterNames[g_state->filter];
+    if (g_state->filter == Presenter::kAiFilter && g_state->presenter && !g_state->presenter->ai_available())
+        filter += L" unavailable: " + std::wstring(g_state->presenter->ai_problem().begin(), g_state->presenter->ai_problem().end());
+    const std::wstring title = g_state->title + L" - " + filter +
+                               (g_state->textures ? L", enhanced textures" : L", original textures") +
+                               L" (F11 changes the filter, F10 the textures)";
     SetWindowTextW(hwnd, title.c_str());
 }
 
 void save_settings() {
     if (g_state->settings.empty()) return;
     if (FILE* f = _wfopen(g_state->settings.c_str(), L"w")) {
-        std::fprintf(f, "filter=%d\nfullscreen=%d\n", g_state->filter, g_state->fullscreen ? 1 : 0);
+        std::fprintf(f, "filter=%d\nfullscreen=%d\ntextures=%d\n", g_state->filter, g_state->fullscreen ? 1 : 0,
+                     g_state->textures ? 1 : 0);
         std::fclose(f);
     }
 }
@@ -139,6 +146,14 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (down && !(lp & (1 << 30))) g_shot_requested = true;
             return 0;
         }
+        if (wp == VK_F10) {
+            if (down && !(lp & (1 << 30))) {
+                g_state->textures = !g_state->textures;
+                update_title(hwnd);
+                save_settings();
+            }
+            return 0;
+        }
         if (wp == VK_F11) {
             if (down && !(lp & (1 << 30))) {
                 g_state->filter = (g_state->filter + 1) % Presenter::kFilterCount;
@@ -189,6 +204,7 @@ bool run_window(Display& display, const WindowOptions& options,
     State state;
     state.display = &display;
     state.filter = options.filter % Presenter::kFilterCount;
+    state.textures = options.textures;
     state.settings = options.settings;
     state.title = options.title;
     g_state = &state;
@@ -216,7 +232,7 @@ bool run_window(Display& display, const WindowOptions& options,
     }
     Presenter presenter;
     state.presenter = &presenter;
-    if (!presenter.init(hwnd, error)) {
+    if (!presenter.init(hwnd, options.ai_model, error)) {
         DestroyWindow(hwnd);
         g_state = nullptr;
         return false;
@@ -226,6 +242,8 @@ bool run_window(Display& display, const WindowOptions& options,
     if (options.fullscreen) set_fullscreen(hwnd, true);
 
     std::vector<uint32_t> frame;
+    uint32_t palette[256] = {};
+    const std::vector<Overlay> no_overlays;
     bool running = true;
     const ULONGLONG started = GetTickCount64();
     bool timed_shot_done = options.shot_after <= 0;
@@ -246,7 +264,6 @@ bool run_window(Display& display, const WindowOptions& options,
             h = 480;
             frame.assign(size_t(w) * h, 0xFF000000u);
         } else {
-            uint32_t palette[256];
             for (int i = 0; i < 256; i++)
                 palette[i] = expand(display.palette[i][0]) | (expand(display.palette[i][1]) << 8) |
                              (expand(display.palette[i][2]) << 16) | 0xFF000000u;
@@ -274,7 +291,10 @@ bool run_window(Display& display, const WindowOptions& options,
                      now.wMinute, now.wSecond, shot_number++);
             save_bmp(options.shots / name, frame.data(), w, h);
         }
-        presenter.draw(frame.data(), w, h, state.filter);  // waits for the next vertical blank
+        // Enhanced textures need the picture as the game drew it, so they are left out while the screen is
+        // blanked or in a text mode.
+        const bool overlays = state.textures && display.graphics && display.enabled && pixels;
+        presenter.draw(frame.data(), w, h, state.filter, palette, overlays ? display.copy_overlays() : no_overlays);
     }
     DestroyWindow(hwnd);
     g_state = nullptr;

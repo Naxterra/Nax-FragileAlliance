@@ -638,7 +638,7 @@ class Emitter:
                        ({self.overrides[start]} if start in self.overrides else set()))
         for name in names:
             lines.append(f"namespace native {{ void {name}(Machine& m); }}")
-        lines += [f"void {self.chunk_name(start)}(Machine& m) {{", "    Cpu& c = m.c;"]
+        lines += [f"void {self.chunk_name(start)}(Machine& m) {{", "    Cpu& c = m.c;", "    NAX_TRACE_FUNCTION(m);"]
         if start in self.overrides:
             # The original function is replaced by native code, which also performs its return.
             lines.append(f"    if (c.eip == {hexu(start)}) {{ native::{self.overrides[start]}(m); return; }}")

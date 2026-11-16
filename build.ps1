@@ -17,7 +17,9 @@ param(
     [string]$GameFolder = "",
     [ValidateSet("Release", "Debug")]
     [string]$Configuration = "Release",
-    [switch]$Clean
+    [switch]$Clean,
+    # Builds the write trace described in runtime/cpu.h into the program, in its own object folder.
+    [switch]$TraceWrites
 )
 
 $ErrorActionPreference = "Stop"
@@ -40,7 +42,7 @@ $python = (Get-Command python -ErrorAction Stop).Source
 if ($LASTEXITCODE -ne 0) { throw "Translating FRAGILE.EXE failed." }
 
 $build = Join-Path $root "build\fragile"
-$objects = Join-Path $build "obj-$Configuration"
+$objects = Join-Path $build ("obj-$Configuration" + $(if ($TraceWrites) { "-trace" } else { "" }))
 if ($Clean -and (Test-Path $objects)) { Remove-Item -Recurse -Force $objects }
 New-Item -ItemType Directory -Force $objects | Out-Null
 
@@ -66,6 +68,7 @@ $optimize = if ($Configuration -eq "Release") { @("/O2") } else { @("/Od", "/Zi"
 $flags = @("/nologo", "/c", "/std:c++20", "/EHsc", "/MT", "/W3", "/wd4102", "/MP", "/bigobj", "/utf-8", "/DNOMINMAX",
     "/D_CRT_SECURE_NO_WARNINGS", "/DWIN32_LEAN_AND_MEAN", "/DUNICODE", "/D_UNICODE", "/I$root", "/I$generated",
     "/Fo$($objects -replace '\\', '/')/", "/Fd$($objects -replace '\\', '/')/") + $optimize
+if ($TraceWrites) { $flags += "/DNAX_TRACE_WRITES" }
 if ($stale.Count -gt 0) {
     & cl.exe @flags @stale
     if ($LASTEXITCODE -ne 0) { throw "Compiling failed." }
@@ -74,7 +77,7 @@ if ($stale.Count -gt 0) {
 $exe = Join-Path $build "FragileAllegiance.exe"
 $linkObjects = ($handwritten + $translated) | ForEach-Object { Join-Path $objects ($_.BaseName + ".obj") }
 $debug = if ($Configuration -eq "Debug") { @("/DEBUG") } else { @() }
-& link.exe /nologo /OUT:$exe /SUBSYSTEM:WINDOWS /STACK:8388608 @debug @linkObjects advapi32.lib user32.lib shell32.lib ole32.lib d3d12.lib dxgi.lib d3dcompiler.lib xaudio2.lib
+& link.exe /nologo /OUT:$exe /SUBSYSTEM:WINDOWS /STACK:8388608 @debug @linkObjects advapi32.lib user32.lib shell32.lib ole32.lib d3d12.lib dxgi.lib d3dcompiler.lib xaudio2.lib windowscodecs.lib
 if ($LASTEXITCODE -ne 0) { throw "Linking failed." }
 Copy-Item (Join-Path $generated "image.bin") (Join-Path $build "image.bin") -Force
 Write-Host "Built $exe ($($stale.Count) sources compiled)"

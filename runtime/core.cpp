@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 
 namespace nax {
 
@@ -36,7 +37,16 @@ const PlaceholderApi& api() {
 
 }  // namespace
 
+#ifdef NAX_TRACE_WRITES
+uint32_t trace_range_lo();
+uint32_t trace_range_hi();
+#endif
+
 Machine::Machine() {
+#ifdef NAX_TRACE_WRITES
+    trace_lo = trace_range_lo();
+    trace_hi = trace_range_hi();
+#endif
     const PlaceholderApi& p = api();
     if (!p.ok()) throw std::runtime_error("This version of Windows lacks the memory placeholder functions (Windows 10 1803 or later is needed).");
     // One placeholder covers the whole guest space. It is split into the part below the windows, the two
@@ -175,3 +185,47 @@ void Machine::divide_error(uint32_t address) {
 }
 
 }  // namespace nax
+
+#ifdef NAX_TRACE_WRITES
+#include <map>
+#include <unordered_map>
+
+namespace nax {
+namespace {
+std::unordered_map<uint64_t, uint64_t> trace_counts;  // (function << 32 | caller) to bytes written
+uint64_t trace_total = 0;
+}  // namespace
+
+void Machine::trace_write(uint32_t) {
+    trace_counts[(uint64_t(trace_function) << 32) | trace_caller]++;
+    if ((++trace_total & 0xFFFFFF) == 0) trace_report();
+}
+
+// Writes the counts, most written first, to trace-writes.txt in the current folder.
+void Machine::trace_report() {
+    std::multimap<uint64_t, uint64_t, std::greater<uint64_t>> sorted;
+    for (const auto& [key, count] : trace_counts) sorted.emplace(count, key);
+    FILE* f = std::fopen("trace-writes.txt", "w");
+    if (!f) return;
+    for (const auto& [count, key] : sorted)
+        std::fprintf(f, "%08X from %08X  %llu\n", uint32_t(key >> 32) - load_shift, uint32_t(key) - load_shift,
+                     static_cast<unsigned long long>(count));
+    std::fclose(f);
+}
+
+namespace {
+// Reads NAX_TRACE_WRITES=lo-hi (guest addresses in hexadecimal) when the first machine is built.
+struct TraceRange {
+    uint32_t lo = 0, hi = 0;
+    TraceRange() {
+        if (const char* text = std::getenv("NAX_TRACE_WRITES")) {
+            unsigned long a = 0, b = 0;
+            if (std::sscanf(text, "%lx-%lx", &a, &b) == 2) { lo = uint32_t(a); hi = uint32_t(b); }
+        }
+    }
+};
+}  // namespace
+uint32_t trace_range_lo() { static TraceRange r; return r.lo; }
+uint32_t trace_range_hi() { static TraceRange r; return r.hi; }
+}  // namespace nax
+#endif

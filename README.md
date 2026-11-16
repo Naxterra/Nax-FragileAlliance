@@ -13,10 +13,12 @@ The game starts natively on Windows 11, shows its title screen and menus in a Di
 | Loader, code discovery and translation to C++ | Done for the whole program. Original functions, or single instructions, can be replaced by native C++ code. |
 | CPU core (registers, flags, x87, the 4 GB guest address space, the dispatcher) | Done. |
 | Start-up, memory, files, clock, country settings, timer | Native Windows replacements. |
-| Graphics | Native. The picture is shown through Direct3D 12 with three filters (F11), in a window or borderless fullscreen (Alt+Enter), and F12 saves a screenshot. |
+| Graphics | Native. The picture is shown through Direct3D 12, in a window or borderless fullscreen (Alt+Enter), and F12 saves a screenshot. F11 switches between AI upscaling (the default), sharp pixels, smooth edges and a CRT look. |
+| AI upscaling | Every frame is enlarged four times by a Real-ESRGAN neural network that runs live on the graphics card, so the terrain, buildings, ships and text are all redrawn by it. The network is computed again only where the picture changed. It needs Upscayl, whose compact model the game reads (see Requirements). |
 | Keyboard and mouse | Native. Windows messages feed the game's own key table and mouse handler. |
 | Network | Reported as absent, so the game runs as a single-player game. |
 | Sound | Native. Music, speech and sound effects are mixed in software and played through XAudio2. |
+| Enhanced textures | Panels, buttons, icons and other sprites can be replaced by enlarged versions from a texture pack that you make from your own copy (see below). F10 switches between enhanced and original textures. |
 | Intro movies (GDV) | Not replaced yet. They are skipped. |
 
 ## How the game runs on Windows
@@ -32,6 +34,8 @@ There is no DOS, no DOS extender and no emulated PC hardware. Every place where 
 | Graphics | Video memory is a Windows memory section. The game's read and write windows are 4 MB views of it, and a bank switch maps a different part of the section into a window, as a VESA card's memory mapping did, so nothing is copied. The window thread shows the section through Direct3D 12. Palette writes go to the display directly. |
 | Keyboard and mouse | Windows key messages are fed into the game's key table the way its keyboard interrupt handler did, and the game's mouse handler is called for every mouse message, with the game pointer kept exactly under the Windows pointer. |
 | Sound | The game's calls to the HMI sound library start, continue, stop and fade samples in a software mixer, which reads the sample data straight from the game's memory and resamples it to 44.1 kHz with interpolation. The game streams music and speech from its WAV files in parts and hands over each next part from a callback, which is called at the end of every part as the Sound Blaster driver did. The mixer runs on the game's own 120 Hz sound tick and keeps about 60 ms of sound queued at XAudio2. |
+| AI upscaling | The compact Real-ESRGAN network (SRVGGNetCompact: 34 convolutions of 3x3 with 64 channels, PReLU, a 4x pixel shuffle and the input enlarged by nearest neighbour added on top) runs as Direct3D 12 compute shaders, with its activations kept as 16-bit floats. The weights come from Upscayl's `upscayl-lite-4x` model and are read from the Upscayl installation at start. The picture edges are mirrored as Upscayl does, so the result matches Upscayl's own output. Each frame is compared with the last one in 16x16 tiles, and only the changed areas, widened by the 34 pixels a change can reach through the network, are computed again. |
+| Enhanced textures | The game keeps everything it shows on top of its backgrounds as objects in one display list, which its sprite engine redraws into a picture buffer and copies to the screen. After each copy, native code reads that list and identifies every sprite frame by a hash of its content. The window thread draws the enhanced version of each frame over the picture in the list's order, and on each pixel only while the screen still shows that frame's original colour there, so text, boxes and anything else drawn over a sprite stay visible. Each pixel follows the change of its palette entry since the enhanced picture was made, which keeps fades and colour cycling working. |
 | Memory layout | The program is loaded 4 MB above its link addresses, as DOS/4GW loaded it, so the first 640 KB stay free for the game's fixed data. |
 
 ## What the game still needs
@@ -47,6 +51,7 @@ There is no DOS, no DOS extender and no emulated PC hardware. Every place where 
 - Python 3 with the Capstone disassembler, installed with `python -m pip install capstone`.
 - Visual Studio Build Tools with the C++ workload, installed with `winget install Microsoft.VisualStudio.BuildTools`.
 - Your own copy of *Fragile Allegiance*, for example the GOG release.
+- For AI upscaling and texture packs: Upscayl, installed with `winget install Upscayl.Upscayl`. Without it the game runs with the other filters.
 
 ## Building and running
 
@@ -58,6 +63,18 @@ There is no DOS, no DOS extender and no emulated PC hardware. Every place where 
 ```
 
 The program finds the game folder the same way, or takes `--data <folder>`. It writes a log to `%LOCALAPPDATA%\Nax Fragile Allegiance\runtime.log`.
+
+## Making a texture pack
+
+AI upscaling needs no preparation. A texture pack is an optional extra on top of it: panels, buttons and other unscaled sprites are then drawn from pictures enlarged ahead of time with a larger and slower Real-ESRGAN model, which keeps more of the original art's grain than the live network. The enhanced textures are made on your computer from your own copy of the game, so they are not part of this repository. Start the game once with `--dump-textures` and visit the screens you want enhanced: every sprite frame that appears is saved as a PNG file in `%LOCALAPPDATA%\Nax Fragile Allegiance\textures\dump`. Then enlarge the new pictures four times with an AI upscaler and add them to the pack:
+
+```powershell
+winget install Upscayl.Upscayl
+.\build\fragile\FragileAllegiance.exe --dump-textures
+.\tools\make-texture-pack.ps1
+```
+
+The script uses the Real-ESRGAN models that Upscayl installs and runs on the graphics card. `-Model` chooses another model (`high-fidelity-4x` is the default and keeps the grain of the original art, while `digital-art-4x` paints smoother surfaces), and `-Rebuild` enlarges every picture again. The pack lives in `textures\pack` next to the dump, and the game uses it at its next start. Any picture in the pack can also be edited or replaced by hand at any size, as long as it keeps the transparent margin of the dumped picture, enlarged in proportion.
 
 ## Looking at the original program
 
@@ -81,9 +98,9 @@ python -m unittest discover -s tests -v
 | Folder | Content |
 |---|---|
 | `tools/recomp` | The translator: the LE loader, code discovery, the C++ generator, the survey and the listing tool, written in Python. |
-| `runtime` | The CPU core that translated code runs on, the Windows host, the file layer and the CD image reader. |
+| `runtime` | The CPU core that translated code runs on, the Windows host, the file layer, the CD image reader, the sound mixer and the texture packs. |
 | `games/fragile` | The native replacements for Fragile Allegiance and the list of replaced functions. |
-| `tests` | Tests for the translator, the CPU core and the file layer. |
+| `tests` | Tests for the translator, the CPU core, the file layer, the sound mixer, the texture packs and the AI upscaler. |
 
 ## License
 
