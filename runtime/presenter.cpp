@@ -101,7 +101,7 @@ float4 ps(V i) : SV_Target {
 // that palette to the one shown now, which covers fades and colour cycling; transparent pixels, which have
 // no index, follow tint, the average change over the whole picture.
 const char kOverlayShader[] = R"(
-cbuffer Overlay : register(b0) { float4 rect; float2 size; float row; float unused; float4 tint; };
+cbuffer Overlay : register(b0) { float4 rect; float2 size; float row; float scaled; float4 tint; float2 source; float2 unused; };
 Texture2D picture : register(t0);
 Texture2D palette : register(t1);
 Texture2D references : register(t2);
@@ -118,19 +118,32 @@ V vs(uint id : SV_VertexID) {
     return o;
 }
 float4 ps(V i) : SV_Target {
-    int2 local = clamp(int2(floor(i.uv * rect.zw)), int2(0, 0), int2(rect.zw) - 1);
+    // local is the original's pixel under this point and at the game pixel; for an unscaled picture they
+    // correspond one to one. A scaled picture is shrunk by leaving pixels out, so the game pixel may show a
+    // neighbour of local instead, and any of the nine counts.
+    int2 local = clamp(int2(floor(i.uv * source)), int2(0, 0), int2(source) - 1);
+    int2 at = int2(floor(rect.xy + i.uv * rect.zw));
     uint2 o = original.Load(int3(local, 0));
     if (o.y != 0) {
-        int2 at = int2(rect.xy) + local;
         if (any(at < 0) || any(at >= int2(size))) discard;
         float3 shown = picture.Load(int3(at, 0)).rgb;
         float3 wanted = palette.Load(int3(o.x, 0, 0)).rgb;
-        if (any(abs(shown - wanted) > 0.001)) discard;
+        if (any(abs(shown - wanted) > 0.001)) {
+            bool found = false;
+            if (scaled != 0) {
+                for (int dy = -1; dy <= 1 && !found; dy++)
+                    for (int dx = -1; dx <= 1 && !found; dx++) {
+                        uint2 n = original.Load(int3(clamp(local + int2(dx, dy), int2(0, 0), int2(source) - 1), 0));
+                        if (n.y != 0 && all(abs(shown - palette.Load(int3(n.x, 0, 0)).rgb) <= 0.001)) found = true;
+                    }
+            }
+            if (!found) discard;
+        }
         float4 c = enhanced.SampleLevel(smooth, i.uv, 0);
         float3 then = references.Load(int3(o.x, int(row), 0)).rgb;
         // Bright reference colours are scaled; near-black ones, which a ratio would blow up, are shifted.
-        float3 scaled = c.rgb * wanted / max(then, 0.001), shifted = c.rgb + wanted - then;
-        return float4(saturate(then > 0.06 ? scaled : shifted), c.a);
+        float3 ratio = c.rgb * wanted / max(then, 0.001), shifted = c.rgb + wanted - then;
+        return float4(saturate(then > 0.06 ? ratio : shifted), c.a);
     }
     float4 c = enhanced.SampleLevel(smooth, i.uv, 0);
     return float4(saturate(c.rgb * tint.rgb), c.a);
@@ -289,7 +302,7 @@ bool Presenter::init_overlays(std::string* error) {
     ranges[1].BaseShaderRegister = 3;
     D3D12_ROOT_PARAMETER params[3]{};
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    params[0].Constants.Num32BitValues = 12;
+    params[0].Constants.Num32BitValues = 16;
     params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     for (int i = 0; i < 2; i++) {
         params[1 + i].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -447,6 +460,7 @@ Presenter::GpuTexture* Presenter::upload_overlay(const OverlayTexture& t, UINT f
     staging->Unmap(0, nullptr);
     g.slot = free_slots_.back();
     free_slots_.pop_back();
+    g.version = t.version;
 
     D3D12_TEXTURE_COPY_LOCATION dst{}, src{};
     dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
@@ -555,6 +569,11 @@ std::vector<PictureRect> Presenter::changed_rects(const uint32_t* rgba, uint32_t
 
 void Presenter::evict_unused() {
     wait_idle();
+    // Once the GPU is idle, replaced textures are free as well.
+    for (auto& frame : retired_) {
+        for (GpuTexture& old : frame) free_slots_.push_back(old.slot);
+        frame.clear();
+    }
     for (auto it = gpu_textures_.begin(); it != gpu_textures_.end();) {
         if (it->second.last_used + 2 < frame_number_) {
             free_slots_.push_back(it->second.slot);
@@ -669,6 +688,8 @@ void Presenter::draw(const uint32_t* rgba, uint32_t width, uint32_t height, int 
         WaitForSingleObject(fence_event_, INFINITE);
     }
     pending_uploads_[i].clear();  // the frame that used them is done
+    for (GpuTexture& old : retired_[i]) free_slots_.push_back(old.slot);
+    retired_[i].clear();
     frame_number_++;
     std::memcpy(upload_ptr_[i], rgba, size_t(width) * 4 * height);
     std::memcpy(upload_ptr_[i] + palette_offset_, palette, 256 * 4);
@@ -708,6 +729,12 @@ void Presenter::draw(const uint32_t* rgba, uint32_t width, uint32_t height, int 
         for (const Overlay& o : overlays) {
             if (!o.texture) continue;
             auto found = gpu_textures_.find(o.texture->key);
+            if (found != gpu_textures_.end() && found->second.version != o.texture->version) {
+                // A newer version of the picture replaces the old one, which the GPU may still be drawing.
+                retired_[i].push_back(std::move(found->second));
+                gpu_textures_.erase(found);
+                found = gpu_textures_.end();
+            }
             GpuTexture* g = found != gpu_textures_.end() ? &found->second : upload_overlay(*o.texture, i, &budget);
             if (!g) continue;
             g->last_used = frame_number_;
@@ -787,9 +814,10 @@ void Presenter::draw(const uint32_t* rgba, uint32_t width, uint32_t height, int 
             float tint[3];
             for (int k = 0; k < 3; k++) tint[k] = then[k] > 0 ? float(now[k] / then[k]) : 1.0f;
             const float row = float((g->slot - kFirstTextureSlot) / 2);
-            const float constants[12] = {float(o->x), float(o->y), float(t.width), float(t.height), float(width), float(height), row, 0,
-                                         tint[0], tint[1], tint[2], 1};
-            list_->SetGraphicsRoot32BitConstants(0, 12, constants, 0);
+            const bool scaled = o->width != float(t.width) || o->height != float(t.height);
+            const float constants[16] = {o->x, o->y, o->width, o->height, float(width), float(height), row, scaled ? 1.0f : 0.0f,
+                                         tint[0], tint[1], tint[2], 1, float(t.width), float(t.height), 0, 0};
+            list_->SetGraphicsRoot32BitConstants(0, 16, constants, 0);
             auto table = srv_heap_->GetGPUDescriptorHandleForHeapStart();
             table.ptr += UINT64(g->slot) * srv_size_;
             list_->SetGraphicsRootDescriptorTable(2, table);

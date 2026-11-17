@@ -43,11 +43,17 @@ class TextureTests(unittest.TestCase):
     def test_pack_picture_replaces_the_original(self):
         self.run_case("pack_picture_replaces_the_original")
 
-    def test_picture_missing_from_the_pack_is_looked_up_once(self):
-        self.run_case("picture_missing_from_the_pack_is_looked_up_once")
+    def test_missing_picture_is_never_decoded_while_absent(self):
+        self.run_case("missing_picture_is_never_decoded_while_absent")
 
     def test_broken_pack_picture_leaves_the_original(self):
         self.run_case("broken_pack_picture_leaves_the_original")
+
+    def test_picture_added_to_the_pack_later_is_picked_up(self):
+        self.run_case("picture_added_to_the_pack_later_is_picked_up")
+
+    def test_without_a_pack_folder_nothing_is_created_or_done(self):
+        self.run_case("without_a_pack_folder_nothing_is_created_or_done")
 
 
 if __name__ == "__main__":

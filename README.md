@@ -74,7 +74,15 @@ winget install Upscayl.Upscayl
 .\tools\make-texture-pack.ps1
 ```
 
-The script uses the Real-ESRGAN models that Upscayl installs and runs on the graphics card. `-Model` chooses another model (`high-fidelity-4x` is the default and keeps the grain of the original art, while `digital-art-4x` paints smoother surfaces), and `-Rebuild` enlarges every picture again. The pack lives in `textures\pack` next to the dump, and the game uses it at its next start. Any picture in the pack can also be edited or replaced by hand at any size, as long as it keeps the transparent margin of the dumped picture, enlarged in proportion.
+The script uses the Real-ESRGAN models that Upscayl installs and runs on the graphics card. `-Model` chooses another model (`high-fidelity-4x` is the default and keeps the grain of the original art, while `digital-art-4x` paints smoother surfaces), and `-Rebuild` enlarges every picture again. The pack lives in `textures\pack` next to the dump. A running game looks for new or changed pack pictures every few seconds, so there is no need to restart it. Any picture in the pack can also be edited or replaced by hand at any size, as long as it keeps the transparent margin of the dumped picture, enlarged in proportion.
+
+Enlarging keeps the art as it is. `tools\redraw-textures.py` goes further and has Stable Diffusion XL with the tile ControlNet repaint every dumped picture at four times its size, which adds detail such as rock texture and machined metal while the broad colours and shapes of the original stay. Large pictures are repainted in overlapping tiles. The asteroid surface is a new picture for every asteroid, so the tool can keep running with `--watch` while you play: it repaints each new dump within a minute or so, and the game swaps the picture in when it is ready. It needs a Python with PyTorch (CUDA), diffusers, transformers, accelerate, numpy and Pillow, and the models stabilityai/stable-diffusion-xl-base-1.0 (fp16), xinsir/controlnet-tile-sdxl-1.0 and madebyollin/sdxl-vae-fp16-fix in the Hugging Face cache that `HF_HOME` names:
+
+```powershell
+python -I tools\redraw-textures.py --watch
+```
+
+`--strength` sets how much SDXL may change (higher adds more new detail), `--control` how closely it follows the original, and `--rebuild` repaints pictures that were repainted before.
 
 ## Looking at the original program
 

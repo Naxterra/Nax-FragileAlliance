@@ -64,7 +64,8 @@ foreach ($source in $handwritten + $translated) {
     if ($built -lt $source.LastWriteTimeUtc -or $built -lt $limit) { $stale += $source.FullName }
 }
 
-$optimize = if ($Configuration -eq "Release") { @("/O2") } else { @("/Od", "/Zi") }
+# Release builds carry debug information too, so a crash report or a debugger can name the function.
+$optimize = if ($Configuration -eq "Release") { @("/O2", "/Zi", "/FS") } else { @("/Od", "/Zi", "/FS") }
 $flags = @("/nologo", "/c", "/std:c++20", "/EHsc", "/MT", "/W3", "/wd4102", "/MP", "/bigobj", "/utf-8", "/DNOMINMAX",
     "/D_CRT_SECURE_NO_WARNINGS", "/DWIN32_LEAN_AND_MEAN", "/DUNICODE", "/D_UNICODE", "/I$root", "/I$generated",
     "/Fo$($objects -replace '\\', '/')/", "/Fd$($objects -replace '\\', '/')/") + $optimize
@@ -76,7 +77,7 @@ if ($stale.Count -gt 0) {
 
 $exe = Join-Path $build "FragileAllegiance.exe"
 $linkObjects = ($handwritten + $translated) | ForEach-Object { Join-Path $objects ($_.BaseName + ".obj") }
-$debug = if ($Configuration -eq "Debug") { @("/DEBUG") } else { @() }
+$debug = if ($Configuration -eq "Debug") { @("/DEBUG") } else { @("/DEBUG", "/OPT:REF", "/OPT:ICF", "/PDBALTPATH:%_PDB%") }
 & link.exe /nologo /OUT:$exe /SUBSYSTEM:WINDOWS /STACK:8388608 @debug @linkObjects advapi32.lib user32.lib shell32.lib ole32.lib d3d12.lib dxgi.lib d3dcompiler.lib xaudio2.lib windowscodecs.lib
 if ($LASTEXITCODE -ne 0) { throw "Linking failed." }
 Copy-Item (Join-Path $generated "image.bin") (Join-Path $build "image.bin") -Force

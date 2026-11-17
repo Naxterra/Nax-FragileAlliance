@@ -1,5 +1,6 @@
 // Cases for tests/test_textures.py. Each case runs in its own folder (the second argument), returns 0 when
 // it passes and prints what went wrong otherwise.
+#include <algorithm>
 #include <cstdio>
 #include <filesystem>
 #include <string>
@@ -116,11 +117,11 @@ int pack_picture_replaces_the_original(const fs::path& folder) {
     check(t->hd[0] == 0xFF00FF00u && t->hd.back() == 0xFF00FF00u, "the enhanced picture keeps its pixels");
     check(t->reference[1][0] == 200, "the palette file of the pack is used as the reference");
     check(t->used.size() == 2 && t->used[0].first == 1 && t->used[0].second == 3, "the indices of the original are counted");
-    check(!fs::exists(folder / "dump"), "without dumping nothing is written");
+    check(!fs::exists(folder / "dump"), "without dumping nothing is written to the dump folder");
     return failures;
 }
 
-int picture_missing_from_the_pack_is_looked_up_once(const fs::path& folder) {
+int missing_picture_is_never_decoded_while_absent(const fs::path& folder) {
     fs::create_directories(folder / "pack");
     TexturePack pack;
     pack.open(folder / "pack", folder / "dump", false);
@@ -149,6 +150,42 @@ int broken_pack_picture_leaves_the_original(const fs::path& folder) {
     return failures;
 }
 
+int picture_added_to_the_pack_later_is_picked_up(const fs::path& folder) {
+    fs::create_directories(folder / "pack");  // made by the pack tools
+    TexturePack pack;
+    pack.open(folder / "pack", folder / "dump", false);
+    pack.set_search_interval(std::chrono::milliseconds(0));
+    Palette palette;
+    auto decode = [&](GameImage* image) { *image = sample_image(); return true; };
+    check(pack.get(key_of(6), decode, palette.c, true) == nullptr, "a picture the pack lacks has no replacement");
+    // The generator adds the picture while the game runs.
+    const int m = kTextureMargin * 4, bw = 16 + 2 * m, bh = 12 + 2 * m;
+    std::vector<uint32_t> big(size_t(bw) * bh, 0xFF0000FFu);
+    check(save_png(folder / "pack" / (texture_name(key_of(6)) + L".png"), big.data(), bw, bh), "the new pack picture is written");
+    pack.get(key_of(6), decode, palette.c, true);
+    pack.wait();
+    auto first = pack.get(key_of(6), decode, palette.c, true);
+    check(first != nullptr, "the new picture replaces the original without a restart");
+    // The redraw tool then replaces the pack picture with a repainted one.
+    std::fill(big.begin(), big.end(), 0xFF00FF00u);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));  // a newer file time than the first picture
+    check(save_png(folder / "pack" / (texture_name(key_of(6)) + L".png"), big.data(), bw, bh), "the repainted picture is written");
+    check(pack.get(key_of(6), decode, palette.c, true) == first, "the first picture stays while the new one is read");
+    pack.wait();
+    auto second = pack.get(key_of(6), decode, palette.c, true);
+    check(second && second != first && second->version > first->version && second->hd[0] == 0xFF00FF00u,
+          "the changed file replaces the picture as a newer version");
+    return failures;
+}
+
+int without_a_pack_folder_nothing_is_created_or_done(const fs::path& folder) {
+    TexturePack pack;
+    pack.open(folder / "pack", folder / "dump", false);
+    check(!pack.active(), "without a pack folder and without dumping the texture work is off");
+    check(!fs::exists(folder / "pack") && !fs::exists(folder / "dump"), "and no folder is created");
+    return failures;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -164,8 +201,10 @@ int main(int argc, char** argv) {
         {"dumped_picture_keeps_its_colours_and_palette", dumped_picture_keeps_its_colours_and_palette},
         {"picture_is_not_dumped_while_the_palette_changes", picture_is_not_dumped_while_the_palette_changes},
         {"pack_picture_replaces_the_original", pack_picture_replaces_the_original},
-        {"picture_missing_from_the_pack_is_looked_up_once", picture_missing_from_the_pack_is_looked_up_once},
+        {"missing_picture_is_never_decoded_while_absent", missing_picture_is_never_decoded_while_absent},
         {"broken_pack_picture_leaves_the_original", broken_pack_picture_leaves_the_original},
+        {"picture_added_to_the_pack_later_is_picked_up", picture_added_to_the_pack_later_is_picked_up},
+        {"without_a_pack_folder_nothing_is_created_or_done", without_a_pack_folder_nothing_is_created_or_done},
     };
     for (const auto& c : cases)
         if (name == c.name) return c.run(folder);

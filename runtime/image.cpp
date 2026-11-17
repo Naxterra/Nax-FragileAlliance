@@ -12,17 +12,19 @@ namespace nax {
 
 namespace {
 
-// WIC needs COM on the calling thread. Each thread that touches pictures initialises it once and keeps it
-// for its lifetime; a thread that already chose another apartment model keeps that one, which WIC accepts.
-IWICImagingFactory* factory() {
-    thread_local ComPtr<IWICImagingFactory> made;
-    thread_local bool tried = false;
-    if (!tried) {
-        tried = true;
+// WIC needs COM on the calling thread. Each thread that touches pictures initialises it once for its lifetime;
+// a thread that already chose another apartment model keeps that one, which WIC accepts. The factory is made
+// for each call and released with it: a factory kept until the thread ends would be released after other code
+// on that thread (the sound output) has shut COM down, which crashed the program.
+ComPtr<IWICImagingFactory> factory() {
+    thread_local bool initialised = false;
+    if (!initialised) {
+        initialised = true;
         CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-        CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&made));
     }
-    return made.Get();
+    ComPtr<IWICImagingFactory> made;
+    CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&made));
+    return made;
 }
 
 // WIC's PNG codec works in BGRA, so red and blue change places on the way in and out.
@@ -36,7 +38,7 @@ void swap_red_blue(uint32_t* pixels, size_t count) {
 }  // namespace
 
 bool save_png(const std::filesystem::path& file, const uint32_t* rgba, int width, int height) {
-    IWICImagingFactory* wic = factory();
+    ComPtr<IWICImagingFactory> wic = factory();
     if (!wic || width <= 0 || height <= 0) return false;
     // The picture goes to a temporary file first, so a failed write never leaves a broken PNG behind.
     std::filesystem::path temporary = file;
@@ -70,7 +72,7 @@ bool save_png(const std::filesystem::path& file, const uint32_t* rgba, int width
 }
 
 bool load_png(const std::filesystem::path& file, std::vector<uint32_t>* rgba, int* width, int* height) {
-    IWICImagingFactory* wic = factory();
+    ComPtr<IWICImagingFactory> wic = factory();
     if (!wic) return false;
     ComPtr<IWICBitmapDecoder> decoder;
     ComPtr<IWICBitmapFrameDecode> frame;

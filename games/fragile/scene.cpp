@@ -17,9 +17,13 @@ namespace {
 constexpr uint32_t kSceneHead = fa::A(0x1242F0);  // display list head; +28h links the objects in drawing order
 constexpr uint32_t kScreenBusy = fa::A(0x1242CE);  // re-entry counter of the timer routine at 000807FA
 // Drawers the engine stores at +54h of an object. A plain sprite object holds its sheet at +3Ch and its frame
-// at +40h. A sprite reference ("IRPS") holds at +3Ch a record with a pointer to the sheet pointer at +14h and
-// the frame at +18h, whose bits 16 to 23 give a scale (0 for none).
+// at +40h; kDrawScaled draws it scaled down. A sprite reference ("IRPS") holds at +3Ch a record with a pointer
+// to the sheet pointer at +14h and the frame at +18h. In both frame fields the low word selects the frame and
+// bits 16 to 23 give a scale in 256ths, 0 meaning none. A scaled picture starts at the object's position
+// (+30h, +34h) plus the fraction in the low words of +4Ch and +50h, and the engine shrinks it by leaving out
+// rows and columns (0007E487).
 constexpr uint32_t kDrawSprite = fa::A(0x7E29C);
+constexpr uint32_t kDrawScaled = fa::A(0x7E46D);
 constexpr uint32_t kDrawReference = fa::A(0x7E270);
 constexpr uint32_t kSpriteTag = 0x49525053;       // "SPRI", the first dword of a sprite sheet
 constexpr int kMaxObjects = 4096;
@@ -29,7 +33,8 @@ constexpr int kSettledUpdates = 30;  // updates without a palette change before 
 // One sprite frame on screen. data is the guest address of its rows.
 struct SpriteRef {
     uint32_t data;
-    int width, height, x, y;
+    int width, height;
+    float x, y, shown_width, shown_height;  // where the frame appears on screen, scaled or not
     uint64_t key;
 };
 
@@ -88,16 +93,18 @@ int find_sprites(const uint8_t* mem, SpriteRef* out, int capacity) {
         uint32_t object = r32(mem, kSceneHead + 0x28);
         for (int steps = 0; object != kSceneHead && steps < kMaxObjects && n < capacity; steps++) {
             const uint32_t drawer = r32(mem, object + 0x54);
-            uint32_t sheet = 0, frame = 0xFFFF;
-            if (drawer == kDrawSprite) {
+            uint32_t sheet = 0, selected = 0xFFFF;
+            if (drawer == kDrawSprite || drawer == kDrawScaled) {
                 sheet = r32(mem, object + 0x3C);
-                frame = r16(mem, object + 0x40);
+                selected = r32(mem, object + 0x40);
+                if (drawer == kDrawSprite) selected &= 0xFFFF;
             } else if (drawer == kDrawReference) {
                 const uint32_t reference = r32(mem, object + 0x3C);
-                const uint32_t selected = r32(mem, reference + 0x18);
+                selected = r32(mem, reference + 0x18);
                 sheet = r32(mem, r32(mem, reference + 0x14));
-                if (!(selected & 0xFF0000)) frame = selected & 0xFFFF;
             }
+            const uint32_t frame = selected & 0xFFFF, scale = (selected >> 16) & 0xFF;
+            if (selected & 0xFF000000) sheet = 0;  // mirrored and other drawing modes keep the original
             if (sheet && !(r16(mem, object + 0x24) & 0x80)) {
                 if (r32(mem, sheet) == kSpriteTag && frame < r16(mem, sheet + 8)) {
                     const uint32_t entry = sheet + (frame + 1) * 16;
@@ -105,8 +112,17 @@ int find_sprites(const uint8_t* mem, SpriteRef* out, int capacity) {
                     const uint32_t data = sheet + r32(mem, entry + 0xC);
                     if (w > 0 && h > 0 && w <= kMaxSide && h <= kMaxSide) {
                         const uint64_t key = frame_key(mem, data, w, h);
-                        if (key)
-                            out[n++] = SpriteRef{data, w, h, int(r32(mem, object + 0x30)), int(r32(mem, object + 0x34)), key};
+                        if (key) {
+                            SpriteRef s{data, w, h, float(int32_t(r32(mem, object + 0x30))), float(int32_t(r32(mem, object + 0x34))),
+                                        float(w), float(h), key};
+                            if (scale) {
+                                s.x += float(r16(mem, object + 0x4C)) / 65536.0f;
+                                s.y += float(r16(mem, object + 0x50)) / 65536.0f;
+                                s.shown_width = float(w) * float(scale) / 256.0f;
+                                s.shown_height = float(h) * float(scale) / 256.0f;
+                            }
+                            out[n++] = s;
+                        }
                     }
                 }
             }
@@ -159,7 +175,8 @@ void publish_overlays(Game& g) {
             image->opaque.assign(size_t(s.width) * s.height, 0);
             return decode_guarded(g.mem, s, image->index.data(), image->opaque.data());
         };
-        if (auto texture = g.textures.get(s.key, decode, palette, settled)) list.push_back(Overlay{texture, s.x, s.y});
+        if (auto texture = g.textures.get(s.key, decode, palette, settled))
+            list.push_back(Overlay{texture, s.x, s.y, s.shown_width, s.shown_height});
     }
     g.overlays_now = std::move(list);
 }

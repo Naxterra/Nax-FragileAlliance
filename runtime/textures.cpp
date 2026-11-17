@@ -2,6 +2,7 @@
 #include "runtime/textures.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <system_error>
@@ -52,9 +53,18 @@ void TexturePack::open(const std::filesystem::path& pack, const std::filesystem:
     dumping_ = dumping;
     std::error_code ec;
     has_pack_ = std::filesystem::is_directory(pack_, ec);
+    next_folder_check_ = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     if (dumping_) std::filesystem::create_directories(dump_, ec);
     entries_.clear();
-    if (has_pack_ && !worker_.joinable()) worker_ = std::thread([this] { work(); });
+}
+
+bool TexturePack::active() {
+    if (!has_pack_ && !pack_.empty() && std::chrono::steady_clock::now() >= next_folder_check_) {
+        std::error_code ec;
+        has_pack_ = std::filesystem::is_directory(pack_, ec);
+        next_folder_check_ = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    }
+    return has_pack_ || dumping_;
 }
 
 TexturePack::~TexturePack() {
@@ -94,20 +104,28 @@ std::shared_ptr<const OverlayTexture> TexturePack::get(uint64_t key, const std::
     if (e.loading) {
         std::lock_guard<std::mutex> lock(mutex_);
         auto done = finished_.find(key);
-        if (done == finished_.end()) return nullptr;
-        e.texture = std::move(done->second);
+        if (done == finished_.end()) return e.texture;  // the previous version, if any, stays until then
+        if (done->second) e.texture = std::move(done->second);
         e.loading = false;
         finished_.erase(done);
     }
-    if (e.looked && (e.texture || e.dumped || !dumping_)) return e.texture;
     std::error_code ec;
-    if (!e.looked) {
+    const auto now = std::chrono::steady_clock::now();
+    if (!e.looked || now >= e.next_search) {
+        if (!e.looked && dumping_ && std::filesystem::exists(dump_ / (texture_name(key) + L".png"), ec)) e.dumped = true;
         e.looked = true;
-        if (dumping_ && std::filesystem::exists(dump_ / (texture_name(key) + L".png"), ec)) e.dumped = true;
-        if (has_pack_ && std::filesystem::exists(pack_ / (texture_name(key) + L".png"), ec)) {
+        e.next_search = now + search_interval_;
+        // The pack file is read when it is new to this key or has changed since it was last read, for example
+        // when the redraw tool replaced the enlarged picture with a repainted one.
+        const std::filesystem::path file = pack_ / (texture_name(key) + L".png");
+        const auto stamp = std::filesystem::last_write_time(file, ec);
+        if (has_pack_ && !ec && stamp != e.tried) {
             Job job;
             job.key = key;
             if (decode(&job.image)) {
+                // A decode that fails (the game was changing the sprite) is tried again at the next search.
+                e.tried = stamp;
+                if (!worker_.joinable()) worker_ = std::thread([this] { work(); });
                 std::memcpy(job.palette, palette, sizeof(job.palette));
                 {
                     std::lock_guard<std::mutex> lock(mutex_);
@@ -115,7 +133,7 @@ std::shared_ptr<const OverlayTexture> TexturePack::get(uint64_t key, const std::
                 }
                 wake_.notify_one();
                 e.loading = true;
-                return nullptr;  // a picture in the pack is never dumped
+                return e.texture;  // a picture in the pack is never dumped
             }
         }
     }
@@ -142,6 +160,8 @@ std::shared_ptr<const OverlayTexture> TexturePack::load(uint64_t key, const Game
     for (int y = 0; y < t->hd_height; y++)
         std::copy_n(&full[size_t(y + my) * fw + mx], t->hd_width, &t->hd[size_t(y) * t->hd_width]);
     t->key = key;
+    static std::atomic<uint64_t> versions{0};
+    t->version = ++versions;
     t->width = image.width;
     t->height = image.height;
     t->index = image.index;

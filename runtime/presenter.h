@@ -50,6 +50,7 @@ private:
         Microsoft::WRL::ComPtr<ID3D12Resource> original, enhanced;
         UINT slot = 0;
         UINT64 last_used = 0;
+        uint64_t version = 0;
     };
     GpuTexture* upload_overlay(const OverlayTexture& t, UINT frame_index, UINT64* budget);
     void evict_unused();
@@ -96,6 +97,7 @@ private:
     std::unordered_map<uint64_t, GpuTexture> gpu_textures_;
     std::vector<UINT> free_slots_;
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> pending_uploads_[kFrames];  // freed once the frame is done
+    std::vector<GpuTexture> retired_[kFrames];  // replaced by a newer version; freed once the frame is done
     UINT64 frame_number_ = 0;
 
     NeuralUpscaler ai_;

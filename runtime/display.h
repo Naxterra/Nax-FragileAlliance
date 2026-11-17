@@ -28,6 +28,7 @@ struct InputEvent {
 // where the game picture still shows the original, so anything drawn over it stays visible.
 struct OverlayTexture {
     uint64_t key = 0;                    // identifies the original picture by its content
+    uint64_t version = 0;                // grows each time a pack file is read, so a changed file replaces the old
     int width = 0, height = 0;           // size of the original in game pixels
     std::vector<uint8_t> index, opaque;  // width x height palette indices, and 1 where the original is drawn
     int hd_width = 0, hd_height = 0;     // size of the enhanced picture
@@ -36,10 +37,11 @@ struct OverlayTexture {
     std::vector<std::pair<uint8_t, uint32_t>> used;  // palette indices of the original and how often each occurs
 };
 
-// One enhanced picture to draw over the game picture, with its top-left corner in game pixels.
+// One enhanced picture to draw over the game picture: its top-left corner and its size in game pixels. A
+// size other than the original's means the game draws the picture scaled down, for distance.
 struct Overlay {
     std::shared_ptr<const OverlayTexture> texture;
-    int x = 0, y = 0;
+    float x = 0, y = 0, width = 0, height = 0;
 };
 
 struct Display {
