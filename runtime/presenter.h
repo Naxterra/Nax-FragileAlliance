@@ -54,6 +54,10 @@ private:
     };
     GpuTexture* upload_overlay(const OverlayTexture& t, UINT frame_index, UINT64* budget);
     void evict_unused(UINT frame_index);
+    // Debugging aid: with NAX_CAPTURE_DIR set, a file capture.txt there that holds a number N makes the next N
+    // presented frames be saved there as PNG files, exactly as they go to the screen. The file is then removed.
+    bool capture_wanted();
+    void save_capture();
     // The rectangles of the picture that changed since the last AI run, or the whole picture when the AI
     // result is not up to date.
     std::vector<PictureRect> changed_rects(const uint32_t* rgba, uint32_t width, uint32_t height);
@@ -99,6 +103,11 @@ private:
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> pending_uploads_[kFrames];  // freed once the frame is done
     std::vector<GpuTexture> retired_[kFrames];  // replaced by a newer version; freed once the frame is done
     UINT64 frame_number_ = 0;
+    std::filesystem::path capture_dir_;
+    int capture_left_ = 0, capture_number_ = 0;
+    UINT64 capture_check_ = 0;
+    Microsoft::WRL::ComPtr<ID3D12Resource> capture_buffer_;
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT capture_layout_{};
 
     NeuralUpscaler ai_;
     bool ai_created_ = false;

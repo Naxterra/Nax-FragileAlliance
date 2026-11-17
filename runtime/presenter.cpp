@@ -1,6 +1,8 @@
 // Draws the game picture into a window with Direct3D 12.
 #include "runtime/presenter.h"
 
+#include "runtime/image.h"
+
 #include <d3dcompiler.h>
 
 #include <algorithm>
@@ -838,14 +840,106 @@ void Presenter::draw(const uint32_t* rgba, uint32_t width, uint32_t height, int 
             list_->DrawInstanced(4, 1, 0, 0);
         }
     }
-    const auto back = transition(targets_[i].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
-    list_->ResourceBarrier(1, &back);
+    bool capture = capture_wanted();
+    if (capture) {
+        const D3D12_RESOURCE_DESC rd = targets_[i]->GetDesc();
+        UINT64 bytes = 0;
+        device_->GetCopyableFootprints(&rd, 0, 1, 0, &capture_layout_, nullptr, nullptr, &bytes);
+        if (!capture_buffer_ || capture_buffer_->GetDesc().Width < bytes) {
+            D3D12_HEAP_PROPERTIES heap{};
+            heap.Type = D3D12_HEAP_TYPE_READBACK;
+            D3D12_RESOURCE_DESC bd{};
+            bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+            bd.Width = bytes;
+            bd.Height = 1;
+            bd.DepthOrArraySize = 1;
+            bd.MipLevels = 1;
+            bd.SampleDesc.Count = 1;
+            bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+            capture_buffer_.Reset();
+            if (FAILED(device_->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_COPY_DEST,
+                                                        nullptr, IID_PPV_ARGS(&capture_buffer_))))
+                capture_buffer_.Reset();
+        }
+        if (!capture_buffer_) capture_left_ = 0;  // no memory for the copy: the request is dropped
+        capture = capture_left_ > 0;
+    }
+    if (capture) {
+        const auto to_copy = transition(targets_[i].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        list_->ResourceBarrier(1, &to_copy);
+        D3D12_TEXTURE_COPY_LOCATION from{}, to{};
+        from.pResource = targets_[i].Get();
+        from.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        to.pResource = capture_buffer_.Get();
+        to.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        to.PlacedFootprint = capture_layout_;
+        list_->CopyTextureRegion(&to, 0, 0, 0, &from, nullptr);
+        const auto back = transition(targets_[i].Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PRESENT);
+        list_->ResourceBarrier(1, &back);
+    } else {
+        const auto back = transition(targets_[i].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+        list_->ResourceBarrier(1, &back);
+    }
     list_->Close();
     ID3D12CommandList* lists[] = {list_.Get()};
     queue_->ExecuteCommandLists(1, lists);
     swap_->Present(1, 0);
     fence_values_[i] = next_fence_++;
     queue_->Signal(fence_.Get(), fence_values_[i]);
+    if (capture) save_capture();
+}
+
+bool Presenter::capture_wanted() {
+    if (capture_left_ > 0) return true;
+    if (capture_dir_.empty()) {
+        wchar_t dir[MAX_PATH];
+        const DWORD n = GetEnvironmentVariableW(L"NAX_CAPTURE_DIR", dir, MAX_PATH);
+        if (n == 0 || n >= MAX_PATH) return false;
+        capture_dir_ = dir;
+    }
+    if (frame_number_ < capture_check_) return false;
+    capture_check_ = frame_number_ + 30;  // the file is looked for about twice a second
+    const std::filesystem::path request = capture_dir_ / L"capture.txt";
+    FILE* f = _wfopen(request.c_str(), L"r");
+    if (!f) return false;
+    int count = 0;
+    if (fscanf(f, "%d", &count) != 1) count = 0;
+    fclose(f);
+    // A request that cannot be removed would be taken again and again, so it is then ignored.
+    std::error_code ec;
+    if (!std::filesystem::remove(request, ec) || ec) return false;
+    capture_left_ = std::max(0, std::min(count, 600));
+    if (capture_left_ > 0 && capture_number_ == 0) {
+        // Numbers continue after the frames of earlier runs, which are never overwritten.
+        for (const auto& entry : std::filesystem::directory_iterator(capture_dir_, ec)) {
+            int n = -1;
+            if (swscanf(entry.path().filename().c_str(), L"frame-%d.png", &n) == 1) capture_number_ = std::max(capture_number_, n + 1);
+        }
+    }
+    return capture_left_ > 0;
+}
+
+void Presenter::save_capture() {
+    wait_idle();
+    capture_left_--;
+    if (!capture_buffer_) return;
+    const UINT w = capture_layout_.Footprint.Width, h = capture_layout_.Footprint.Height;
+    uint8_t* data = nullptr;
+    const D3D12_RANGE range{0, SIZE_T(capture_layout_.Footprint.RowPitch) * h};
+    if (FAILED(capture_buffer_->Map(0, &range, reinterpret_cast<void**>(&data)))) return;
+    std::vector<uint32_t> pixels(size_t(w) * h);
+    for (UINT y = 0; y < h; y++) {
+        const uint32_t* row = reinterpret_cast<const uint32_t*>(data + size_t(y) * capture_layout_.Footprint.RowPitch);
+        for (UINT x = 0; x < w; x++) {
+            const uint32_t c = row[x];  // B, G, R, A in memory
+            pixels[size_t(y) * w + x] = (c & 0xFF00FF00u) | ((c >> 16) & 0xFFu) | ((c & 0xFFu) << 16) | 0xFF000000u;
+        }
+    }
+    const D3D12_RANGE none{0, 0};
+    capture_buffer_->Unmap(0, &none);
+    wchar_t name[32];
+    swprintf(name, 32, L"frame-%05d.png", capture_number_++);
+    save_png(capture_dir_ / name, pixels.data(), int(w), int(h));
 }
 
 }  // namespace nax
