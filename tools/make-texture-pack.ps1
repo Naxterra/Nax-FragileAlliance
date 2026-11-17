@@ -6,7 +6,8 @@ Makes the enhanced texture pack from the game pictures that the program dumped.
 Start the game once with --dump-textures and visit the screens whose pictures should be enhanced; each new
 picture is saved under textures\dump in the user folder. This script then enlarges every dumped picture that
 the pack does not have yet four times with an AI upscaler (Real-ESRGAN models, as Upscayl installs them) and
-puts the result into textures\pack, where the game picks it up at its next start. Pictures can also be edited
+puts the result into textures\pack. A running game notices a new pack folder within a few seconds and looks
+for new or changed pack pictures every few seconds, so it does not have to be restarted. Pictures can also be edited
 or painted by hand: any PNG in the pack with the same name replaces the picture, at any size, as long as it
 keeps the transparent margin of the dumped picture in proportion. The pictures stay on this
 computer, because they are made from the original game.

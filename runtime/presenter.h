@@ -53,7 +53,7 @@ private:
         uint64_t version = 0;
     };
     GpuTexture* upload_overlay(const OverlayTexture& t, UINT frame_index, UINT64* budget);
-    void evict_unused();
+    void evict_unused(UINT frame_index);
     // The rectangles of the picture that changed since the last AI run, or the whole picture when the AI
     // result is not up to date.
     std::vector<PictureRect> changed_rects(const uint32_t* rgba, uint32_t width, uint32_t height);

@@ -401,7 +401,7 @@ Presenter::GpuTexture* Presenter::upload_overlay(const OverlayTexture& t, UINT f
     const UINT64 reference_offset = align(enhanced_offset + enhanced_pitch * t.hd_height, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
     const UINT64 bytes = reference_offset + 256 * 4;
     if (bytes > *budget) return nullptr;  // uploaded during a later frame
-    if (free_slots_.empty()) evict_unused();
+    if (free_slots_.empty()) evict_unused(frame_index);
     if (free_slots_.empty()) return nullptr;
 
     GpuTexture g;
@@ -567,12 +567,14 @@ std::vector<PictureRect> Presenter::changed_rects(const uint32_t* rgba, uint32_t
     return rects;
 }
 
-void Presenter::evict_unused() {
+void Presenter::evict_unused(UINT frame_index) {
     wait_idle();
-    // Once the GPU is idle, replaced textures are free as well.
-    for (auto& frame : retired_) {
-        for (GpuTexture& old : frame) free_slots_.push_back(old.slot);
-        frame.clear();
+    // Once the GPU is idle, textures replaced in earlier frames are free as well. Those replaced while the frame
+    // frame_index is being recorded stay until that frame is done.
+    for (UINT f = 0; f < kFrames; ++f) {
+        if (f == frame_index) continue;
+        for (GpuTexture& old : retired_[f]) free_slots_.push_back(old.slot);
+        retired_[f].clear();
     }
     for (auto it = gpu_textures_.begin(); it != gpu_textures_.end();) {
         if (it->second.last_used + 2 < frame_number_) {
@@ -723,22 +725,34 @@ void Presenter::draw(const uint32_t* rgba, uint32_t width, uint32_t height, int 
     texture_readable_ = true;
 
     // Textures seen for the first time are uploaded before anything is drawn, up to 64 MB per frame.
-    std::vector<std::pair<const Overlay*, GpuTexture*>> drawn;
+    struct Drawn { const Overlay* o; const OverlayTexture* t; GpuTexture* g; };  // t: the version on the GPU
+    std::vector<Drawn> drawn;
     if (filter != 2) {
         UINT64 budget = 64ull << 20;
+        // A pack picture can be reloaded between two sprites of the same frame, so the overlays may carry two
+        // versions of one key. The newest one is drawn for all of them, and every replacement is settled before
+        // any texture is looked up, so no pointer taken below can point at a retired texture.
+        std::unordered_map<uint64_t, const OverlayTexture*> newest;
+        for (const Overlay& o : overlays) {
+            if (!o.texture) continue;
+            const OverlayTexture*& n = newest[o.texture->key];
+            if (!n || o.texture->version > n->version) n = o.texture.get();
+        }
+        for (const auto& [key, t] : newest) {
+            auto found = gpu_textures_.find(key);
+            if (found != gpu_textures_.end() && found->second.version != t->version) {
+                // The newer version replaces the old one, which an earlier frame may still be drawing.
+                retired_[i].push_back(std::move(found->second));
+                gpu_textures_.erase(found);
+            }
+        }
         for (const Overlay& o : overlays) {
             if (!o.texture) continue;
             auto found = gpu_textures_.find(o.texture->key);
-            if (found != gpu_textures_.end() && found->second.version != o.texture->version) {
-                // A newer version of the picture replaces the old one, which the GPU may still be drawing.
-                retired_[i].push_back(std::move(found->second));
-                gpu_textures_.erase(found);
-                found = gpu_textures_.end();
-            }
-            GpuTexture* g = found != gpu_textures_.end() ? &found->second : upload_overlay(*o.texture, i, &budget);
+            GpuTexture* g = found != gpu_textures_.end() ? &found->second : upload_overlay(*newest[o.texture->key], i, &budget);
             if (!g) continue;
             g->last_used = frame_number_;
-            drawn.emplace_back(&o, g);
+            drawn.push_back({&o, newest[o.texture->key], g});
         }
     }
 
@@ -801,8 +815,8 @@ void Presenter::draw(const uint32_t* rgba, uint32_t width, uint32_t height, int 
         list_->SetGraphicsRootSignature(overlay_root_.Get());
         list_->SetGraphicsRootDescriptorTable(1, srv_heap_->GetGPUDescriptorHandleForHeapStart());
         list_->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-        for (const auto& [o, g] : drawn) {
-            const OverlayTexture& t = *o->texture;
+        for (const auto& [o, drawn_texture, g] : drawn) {
+            const OverlayTexture& t = *drawn_texture;
             // The tint compares the colours of the original's indices now with those the enhanced picture
             // was made under, weighted by how often each index occurs.
             double now[3] = {0, 0, 0}, then[3] = {0, 0, 0};

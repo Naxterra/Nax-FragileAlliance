@@ -146,8 +146,14 @@ def redraw(pipe, dump_file, pack_file, args, work):
         replace(target + ".tmp", target)
     temporary = pack_file + ".tmp.png"
     Image.fromarray(result, "RGBA").save(temporary)
-    replace(temporary, pack_file)
+    # The marker is written before the repainted picture replaces the clean one. A pack picture without a marker
+    # is taken as the clean base on the next attempt, so it must never be a repainted one.
     open(marker(pack_file), "w").close()
+    try:
+        replace(temporary, pack_file)
+    except Exception:
+        os.remove(marker(pack_file))  # the clean picture is still in place and is repainted again later
+        raise
 
 
 def replace(source, target):
@@ -178,11 +184,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--folder", default=default_folder(), help="the textures folder with dump and pack")
     parser.add_argument("--upscayl", default=os.path.join(os.environ.get("ProgramFiles", ""), "Upscayl", "resources"))
-    parser.add_argument("--strength", type=float, default=0.45, help="how much SDXL may change (0 to 1)")
+    parser.add_argument("--strength", type=float, default=0.8, help="how much SDXL may change (0 to 1)")
     parser.add_argument("--steps", type=int, default=30)
     parser.add_argument("--guidance", type=float, default=5.0)
-    parser.add_argument("--control", type=float, default=0.8, help="how closely SDXL follows the clean picture")
-    parser.add_argument("--colour-blur", type=float, default=2.0, help="radius in game pixels of the kept colours")
+    parser.add_argument("--control", type=float, default=0.5, help="how closely SDXL follows the clean picture")
+    parser.add_argument("--colour-blur", type=float, default=8.0, help="radius in game pixels of the kept colours")
     parser.add_argument("--rebuild", action="store_true", help="repaint pictures that were repainted before")
     parser.add_argument("--watch", action="store_true", help="keep running and repaint new dumps as they appear")
     parser.add_argument("--only", nargs="*", default=[], help="repaint only these pictures (key prefixes)")
