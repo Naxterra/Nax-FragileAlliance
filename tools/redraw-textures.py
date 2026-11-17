@@ -1,28 +1,28 @@
-"""Redraws the dumped game pictures with Stable Diffusion XL, which adds detail instead of only enlarging.
+"""Creates review candidates from explicitly selected pictures with Stable Diffusion XL.
 
 The game saves each picture it shows into textures/dump when it runs with --dump-textures (see README). For every
 dumped picture this tool takes a clean four-times enlargement (the pack picture that make-texture-pack.ps1 made
 with Real-ESRGAN, or a new one through Upscayl), lets SDXL with the tile ControlNet repaint it at that size, keeps
 the broad colours and shading of the clean enlargement with the fine detail of the repainted one, and puts the
-result into textures/pack, where a running game picks it up within a few seconds. Large pictures, such as the
-asteroid surface, are repainted in overlapping tiles of 1024 pixels.
+result into textures/candidates. It never updates the active pack. Asset categories are explicit; image width
+does not identify terrain, and pictures classified as interface are protected from generative repainting.
+Large pictures are repainted in overlapping tiles of 1024 pixels.
 
 It needs a Python with PyTorch (CUDA), diffusers, transformers, accelerate, numpy and Pillow, and the models
 stabilityai/stable-diffusion-xl-base-1.0 (fp16), xinsir/controlnet-tile-sdxl-1.0 and madebyollin/sdxl-vae-fp16-fix
-in the Hugging Face cache that HF_HOME names. With --watch it keeps running and repaints new dumps as they appear,
-so each new asteroid's surface is redrawn while the game is played.
+in the Hugging Face cache that HF_HOME names. With --watch it processes only selected keys as they appear.
 
-    python -I tools/redraw-textures.py --watch
+    python -I tools/redraw-textures.py --only <texture-key> --kind terrain
 """
 import argparse
+import json
 import os
+from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
 import time
-
-import numpy as np
-from PIL import Image, ImageFilter
 
 MARGIN = 8  # transparent pixels around every dumped picture, see runtime/textures.h
 SCALE = 4
@@ -121,14 +121,44 @@ def broad(picture, radius):
     return np.asarray(Image.fromarray(picture.clip(0, 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(radius)), np.float32)
 
 
+def asset_kind(key, kinds, default):
+    """Classification is explicit: wide interface panels are not terrain."""
+    return kinds.get(key, default)
+
+
+def read_asset_types(path):
+    if not path:
+        return {}
+    with open(path, encoding="utf-8") as source:
+        kinds = json.load(source)
+    if not isinstance(kinds, dict) or any(
+            not isinstance(key, str) or not re.fullmatch(r"[0-9a-f]{16}", key)
+            or kind not in ("art", "terrain", "interface") for key, kind in kinds.items()):
+        raise ValueError("Asset types must map full lowercase texture keys to art, terrain or interface")
+    return kinds
+
+
+def candidate_folder(folder, output=None):
+    root = Path(folder).resolve()
+    target = (Path(output) if output else root / "candidates").resolve()
+    for protected in (root / "pack", root / "dump"):
+        protected = protected.resolve()
+        if target == protected or target.is_relative_to(protected) or protected.is_relative_to(target):
+            raise ValueError("Candidate output must be separate from the active pack and original dump")
+    return target
+
+
 def redraw(pipe, dump_file, pack_file, args, work):
-    clean = clean_enlargement(dump_file, pack_file, args.upscayl, work)
+    key = os.path.splitext(os.path.basename(dump_file))[0]
+    kind = asset_kind(key, args.asset_types, args.kind)
+    if kind == "interface":
+        raise ValueError("Interface pictures require faithful enlargement, not generative repainting")
+    active = os.path.join(args.folder, "pack", os.path.basename(dump_file))
+    clean = clean_enlargement(dump_file, active, args.upscayl, work)
     rgba = np.asarray(clean, np.float32)
     rgb, alpha = rgba[:, :, :3], rgba[:, :, 3:]
-    original = Image.open(dump_file)
-    terrain = original.width - 2 * MARGIN >= 400
     seed = int(os.path.splitext(os.path.basename(dump_file))[0][:8], 16)
-    detailed = repaint(pipe, rgb.astype(np.uint8), args, TERRAIN_PROMPT if terrain else PROMPT, seed)
+    detailed = repaint(pipe, rgb.astype(np.uint8), args, TERRAIN_PROMPT if kind == "terrain" else PROMPT, seed)
     # Fine detail from the repainted picture on top of the broad colours and shading of the clean one, so the
     # picture keeps the game's palette and only gains detail.
     radius = SCALE * args.colour_blur
@@ -170,9 +200,9 @@ def replace(source, target):
             time.sleep(0.25)
 
 
-def pending(folder, rebuild):
+def pending(folder, rebuild, output=None):
     dump = os.path.join(folder, "dump")
-    pack = os.path.join(folder, "pack")
+    pack = str(candidate_folder(folder, output))
     names = sorted(n for n in os.listdir(dump) if n.endswith(".png")) if os.path.isdir(dump) else []
     for name in names:
         pack_file = os.path.join(pack, name)
@@ -183,6 +213,9 @@ def pending(folder, rebuild):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--folder", default=default_folder(), help="the textures folder with dump and pack")
+    parser.add_argument("--output", help="candidate output, separate from the active pack and dump")
+    parser.add_argument("--asset-types", help="JSON mapping full texture keys to art, terrain or interface")
+    parser.add_argument("--kind", choices=("art", "terrain"), default="art", help="explicit category for selected keys not in the manifest")
     parser.add_argument("--upscayl", default=os.path.join(os.environ.get("ProgramFiles", ""), "Upscayl", "resources"))
     parser.add_argument("--strength", type=float, default=0.8, help="how much SDXL may change (0 to 1)")
     parser.add_argument("--steps", type=int, default=30)
@@ -194,14 +227,33 @@ def main():
     parser.add_argument("--only", nargs="*", default=[], help="repaint only these pictures (key prefixes)")
     args = parser.parse_args()
 
+    try:
+        args.asset_types = read_asset_types(args.asset_types)
+        output = candidate_folder(args.folder, args.output)
+    except (ValueError, OSError) as error:
+        parser.error(str(error))
+    if not args.only and not args.asset_types:
+        parser.error("Select texture keys with --only or supply an explicit --asset-types manifest")
+
+    if not args.only:
+        args.only = [key for key, kind in args.asset_types.items() if kind != "interface"]
+        if not args.only:
+            print("No pictures selected for generative repainting.")
+            return 0
+
+    # Policy and argument checks work without the optional image/model packages.
+    global np, Image, ImageFilter
+    import numpy as np
+    from PIL import Image, ImageFilter
+
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
-    os.makedirs(os.path.join(args.folder, "pack", "redrawn"), exist_ok=True)
+    os.makedirs(output / "redrawn", exist_ok=True)
     pipe = load_pipeline()
     done = failed = 0
     attempts = {}  # failures per picture in this run; a failure may be passing, such as a full graphics memory
     with tempfile.TemporaryDirectory() as work:
         while True:
-            todo = [t for t in pending(args.folder, args.rebuild)
+            todo = [t for t in pending(args.folder, args.rebuild, output)
                     if (not args.only or any(os.path.basename(t[0]).startswith(o) for o in args.only))
                     and attempts.get(t[0], 0) < 3]
             for i, (dump_file, pack_file) in enumerate(todo):
@@ -220,7 +272,7 @@ def main():
             if not args.watch:
                 break
             time.sleep(5)
-    print(f"Redrew {done} pictures, {failed} failed.")
+    print(f"Wrote {done} review candidates to {output}, {failed} failed. The active pack was not changed.")
     return 0 if failed == 0 else 1
 
 

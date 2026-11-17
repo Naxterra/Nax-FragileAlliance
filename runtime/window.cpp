@@ -18,11 +18,19 @@ struct State {
     int filter = 0;
     bool fullscreen = false;
     bool textures = true;  // enhanced textures are drawn where the texture pack has them
+    bool owns_cursor = false;
     WINDOWPLACEMENT placement{sizeof(WINDOWPLACEMENT)};
     std::filesystem::path settings;
     std::wstring title;
 };
 State* g_state = nullptr;
+
+void restore_cursor() {
+    if (!g_state || !g_state->owns_cursor) return;
+    g_state->owns_cursor = false;
+    CURSORINFO cursor{sizeof(cursor)};
+    if (GetCursorInfo(&cursor) && !cursor.hCursor) SetCursor(LoadCursorW(nullptr, IDC_ARROW));
+}
 
 // Saves the game picture, at its own size and before filtering, as a 24-bit BMP file.
 bool save_bmp(const std::filesystem::path& file, const uint32_t* rgba, uint32_t w, uint32_t h) {
@@ -58,7 +66,7 @@ bool save_bmp(const std::filesystem::path& file, const uint32_t* rgba, uint32_t 
 
 bool g_shot_requested = false;
 
-const wchar_t* const kFilterNames[Presenter::kFilterCount] = {L"sharp pixels", L"smooth edges", L"CRT", L"AI upscaling"};
+const wchar_t* const kFilterNames[Presenter::kFilterCount] = {L"sharp pixels", L"smooth edges", L"CRT", L"neural frame filter"};
 
 void update_title(HWND hwnd) {
     std::wstring filter = kFilterNames[g_state->filter];
@@ -131,7 +139,11 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_SETCURSOR:
         // The game draws its own mouse pointer, so the Windows pointer is hidden over the client area.
-        if (LOWORD(lp) == HTCLIENT) { SetCursor(nullptr); return TRUE; }
+        if (LOWORD(lp) == HTCLIENT) { SetCursor(nullptr); g_state->owns_cursor = true; return TRUE; }
+        restore_cursor();
+        break;
+    case WM_KILLFOCUS:
+        restore_cursor();
         break;
     case WM_SYSKEYDOWN:
     case WM_KEYDOWN:
@@ -237,9 +249,9 @@ bool run_window(Display& display, const WindowOptions& options,
         g_state = nullptr;
         return false;
     }
-    ShowWindow(hwnd, SW_SHOW);
+    if (!options.hidden) ShowWindow(hwnd, SW_SHOW);
     update_title(hwnd);
-    if (options.fullscreen) set_fullscreen(hwnd, true);
+    if (options.fullscreen && !options.hidden) set_fullscreen(hwnd, true);
 
     std::vector<uint32_t> frame(size_t(640) * 480, 0xFF000000u);
     uint32_t w = 640, h = 480;
@@ -251,6 +263,10 @@ bool run_window(Display& display, const WindowOptions& options,
     bool timed_shot_done = options.shot_after <= 0;
     int shot_number = 0;
     while (running) {
+        if (options.stop_after > 0 && double(GetTickCount64() - started) / 1000.0 >= options.stop_after) {
+            display.quit = true;
+            break;
+        }
         MSG msg;
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
             if (msg.message == WM_QUIT) running = false;
@@ -291,7 +307,9 @@ bool run_window(Display& display, const WindowOptions& options,
         // A blank or text screen carries no enhanced pictures.
         static const std::vector<Overlay> none;
         presenter.draw(frame.data(), w, h, state.filter, palette, state.textures && shown.shown ? shown.overlays : none);
+        if (options.hidden) Sleep(16);
     }
+    restore_cursor();
     DestroyWindow(hwnd);
     g_state = nullptr;
     return true;

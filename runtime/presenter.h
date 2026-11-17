@@ -48,11 +48,12 @@ private:
     // picture, with their shader resource views in two neighbouring slots of the descriptor heap.
     struct GpuTexture {
         Microsoft::WRL::ComPtr<ID3D12Resource> original, enhanced;
+        std::shared_ptr<const OverlayTexture> source;
         UINT slot = 0;
         UINT64 last_used = 0;
         uint64_t version = 0;
     };
-    GpuTexture* upload_overlay(const OverlayTexture& t, UINT frame_index, UINT64* budget);
+    GpuTexture* upload_overlay(const std::shared_ptr<const OverlayTexture>& source, UINT frame_index, UINT64* budget);
     void evict_unused(UINT frame_index);
     // Debugging aid: with NAX_CAPTURE_DIR set, a file capture.txt there that holds a number N makes the next N
     // presented frames be saved there as PNG files, exactly as they go to the screen. The file is then removed.

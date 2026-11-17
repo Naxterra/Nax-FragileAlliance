@@ -13,8 +13,8 @@ The game starts natively on Windows 11, shows its title screen and menus in a Di
 | Loader, code discovery and translation to C++ | Done for the whole program. Original functions, or single instructions, can be replaced by native C++ code. |
 | CPU core (registers, flags, x87, the 4 GB guest address space, the dispatcher) | Done. |
 | Start-up, memory, files, clock, country settings, timer | Native Windows replacements. |
-| Graphics | Native. The picture is shown through Direct3D 12, in a window or borderless fullscreen (Alt+Enter), and F12 saves a screenshot. F11 switches between AI upscaling (the default), sharp pixels, smooth edges and a CRT look. |
-| AI upscaling | Every frame is enlarged four times by a Real-ESRGAN neural network that runs live on the graphics card, so the terrain, buildings, ships and text are all redrawn by it. The network is computed again only where the picture changed. It needs Upscayl, whose compact model the game reads (see Requirements). |
+| Graphics | Native. The picture is shown through Direct3D 12, in a window or borderless fullscreen (Alt+Enter), and F12 saves an unfiltered game screenshot. Sharp pixels are the default. F11 also offers smooth edges, a CRT look and optional neural upscaling. |
+| Neural frame filter | Optional four-times Real-ESRGAN filtering on the graphics card. It also changes text, so the original picture remains the default. The network is computed again only where the picture changed. It needs Upscayl, whose compact model the game reads (see Requirements). |
 | Keyboard and mouse | Native. Windows messages feed the game's own key table and mouse handler. |
 | Network | Reported as absent, so the game runs as a single-player game. |
 | Sound | Native. Music, speech and sound effects are mixed in software and played through XAudio2. |
@@ -64,9 +64,17 @@ There is no DOS, no DOS extender and no emulated PC hardware. Every place where 
 
 The program finds the game folder the same way, or takes `--data <folder>`. It writes a log to `%LOCALAPPDATA%\Nax Fragile Allegiance\runtime.log`.
 
+`install.ps1` installs the prepared executable and private translated image for this user and creates a **Fragile Allegiance Enhanced** Start menu shortcut. If the installed game is open, the new build goes into a separate version folder and the shortcut selects it on the next launch. Existing sessions, saves and the original installation are retained. Translated images are private build artifacts and must not be distributed.
+
+For isolated verification, `--user-dir <folder>` selects a separate profile, `--hidden` renders without showing a desktop window, and `--run-seconds <seconds>` ends a bounded run. A profile inside the original installation is rejected.
+
 ## Making a texture pack
 
-AI upscaling needs no preparation. A texture pack is an optional extra on top of it: panels, buttons and other unscaled sprites are then drawn from pictures enlarged ahead of time with a larger and slower Real-ESRGAN model, which keeps more of the original art's grain than the live network. The enhanced textures are made on your computer from your own copy of the game, so they are not part of this repository. Start the game once with `--dump-textures` and visit the screens you want enhanced: every sprite frame that appears is saved as a PNG file in `%LOCALAPPDATA%\Nax Fragile Allegiance\textures\dump`. Then enlarge the new pictures four times with an AI upscaler and add them to the pack:
+The default combines the original picture with faithful enlarged textures where available. Legacy textures marked as SDXL repaints are ignored. `tools/restore-texture-pack.ps1` backs up the whole existing pack, builds and validates a faithful replacement in a separate staging folder, then promotes the completed set. It preserves the original dumps and keeps the prior pack for recovery.
+
+The frame filters and texture enlargement preserve the source artwork's limited resolution. A modern graphics overhaul still needs higher-resolution source artwork and work on the scene renderer. A pack covers only the pictures prepared for it; a newly generated asteroid can have a different terrain picture and retain its original graphics. F10 compares the pack with the original artwork, and F11 selects a frame filter independently.
+
+AI upscaling needs no preparation. A texture pack is an optional extra that works with every display filter: panels, buttons and sprites are then drawn from pictures enlarged ahead of time with a larger and slower Real-ESRGAN model, which keeps more of the original art's grain than the live network. The enhanced textures are made on your computer from your own copy of the game, so they are not part of this repository. Start the game once with `--dump-textures` and visit the screens you want enhanced: every sprite frame that appears is saved as a PNG file in `%LOCALAPPDATA%\Nax Fragile Allegiance\textures\dump`. Then enlarge the new pictures four times with an AI upscaler and add them to the pack:
 
 ```powershell
 winget install Upscayl.Upscayl
@@ -76,13 +84,13 @@ winget install Upscayl.Upscayl
 
 The script uses the Real-ESRGAN models that Upscayl installs and runs on the graphics card. `-Model` chooses another model (`high-fidelity-4x` is the default and keeps the grain of the original art, while `digital-art-4x` paints smoother surfaces), and `-Rebuild` enlarges every picture again. The pack lives in `textures\pack` next to the dump. A running game looks for new or changed pack pictures every few seconds, so there is no need to restart it. Any picture in the pack can also be edited or replaced by hand at any size, as long as it keeps the transparent margin of the dumped picture, enlarged in proportion.
 
-Enlarging keeps the art as it is. `tools\redraw-textures.py` goes further and has Stable Diffusion XL with the tile ControlNet repaint every dumped picture at four times its size, which adds detail such as rock texture and machined metal while the broad colours and shapes of the original stay. Large pictures are repainted in overlapping tiles. The asteroid surface is a new picture for every asteroid, so the tool can keep running with `--watch` while you play: it repaints each new dump within a minute or so, and the game swaps the picture in when it is ready. It needs a Python with PyTorch (CUDA), diffusers, transformers, accelerate, numpy and Pillow, and the models stabilityai/stable-diffusion-xl-base-1.0 (fp16), xinsir/controlnet-tile-sdxl-1.0 and madebyollin/sdxl-vae-fp16-fix in the Hugging Face cache that `HF_HOME` names:
+`tools\redraw-textures.py` is an optional experiment for explicitly selected artwork. It writes SDXL results into `textures\candidates`, separate from the active pack and original dumps. Image width does not identify terrain. Select full texture keys or prefixes with `--only` and choose `--kind art` or `--kind terrain`, or supply `--asset-types` with a JSON mapping full keys to `art`, `terrain` or protected `interface`. Interface pictures are never sent to the generative model. Review candidates before manually promoting any picture. Generative repainting can change shapes and detail; it is not required for the faithful texture pack.
 
 ```powershell
-python -I tools\redraw-textures.py --watch
+python -I tools\redraw-textures.py --only <texture-key> --kind terrain
 ```
 
-`--strength` sets how much SDXL may change (higher adds more new detail), `--control` how closely it follows the original, and `--rebuild` repaints pictures that were repainted before.
+`--watch` processes only selected keys as their dumps appear. `--strength`, `--control` and `--rebuild` affect candidates only. The optional model environment needs PyTorch with CUDA, diffusers, transformers, accelerate, numpy, Pillow, and the SDXL base, tile ControlNet and VAE listed in the script.
 
 ## Looking at the original program
 
@@ -100,6 +108,8 @@ The tests use small synthetic programs and a small built-in CD image, so they ne
 ```powershell
 python -m unittest discover -s tests -v
 ```
+
+The presenter tests read back actual DX12 output from hidden windows and check black/partial fades, palette animation, exact scaled-sprite sampling, fractional positions, transparent holes and deferred texture replacement. A synthetic neural network checks that computed frames, cached frames and local updates all reach the screen consistently. Texture-policy tests reject automatic batch repainting and unsafe candidate destinations. No game textures are test fixtures.
 
 ## Layout
 

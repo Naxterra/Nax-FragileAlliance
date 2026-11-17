@@ -55,6 +55,9 @@ class TextureTests(unittest.TestCase):
     def test_without_a_pack_folder_nothing_is_created_or_done(self):
         self.run_case("without_a_pack_folder_nothing_is_created_or_done")
 
+    def test_legacy_repaint_is_ignored_until_faithful_rebuild(self):
+        self.run_case("legacy_repaint_is_ignored_until_faithful_rebuild")
+
 
 if __name__ == "__main__":
     unittest.main()

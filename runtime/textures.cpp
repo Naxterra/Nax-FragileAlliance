@@ -118,6 +118,10 @@ std::shared_ptr<const OverlayTexture> TexturePack::get(uint64_t key, const std::
         // The pack file is read when it is new to this key or has changed since it was last read, for example
         // when the redraw tool replaced the enlarged picture with a repainted one.
         const std::filesystem::path file = pack_ / (texture_name(key) + L".png");
+        // Older tools repainted the active pack without a review step. Keep
+        // those files as recoverable artwork, but do not apply them to the game.
+        if (std::filesystem::exists(pack_ / L"redrawn" / texture_name(key), ec)) return e.texture;
+        ec.clear();
         const auto stamp = std::filesystem::last_write_time(file, ec);
         if (has_pack_ && !ec && stamp != e.tried) {
             Job job;
@@ -146,6 +150,8 @@ std::shared_ptr<const OverlayTexture> TexturePack::get(uint64_t key, const std::
 }
 
 std::shared_ptr<const OverlayTexture> TexturePack::load(uint64_t key, const GameImage& image, const uint8_t palette[256][3]) {
+    std::error_code ec;
+    if (std::filesystem::exists(pack_ / L"redrawn" / texture_name(key), ec)) return nullptr;
     auto t = std::make_shared<OverlayTexture>();
     std::vector<uint32_t> full;
     int fw = 0, fh = 0;
@@ -175,6 +181,7 @@ std::shared_ptr<const OverlayTexture> TexturePack::load(uint64_t key, const Game
         if (t->opaque[i]) counts[t->index[i]]++;
     for (int i = 0; i < 256; i++)
         if (counts[i]) t->used.emplace_back(uint8_t(i), counts[i]);
+    if (std::filesystem::exists(pack_ / L"redrawn" / texture_name(key), ec)) return nullptr;
     return t;
 }
 

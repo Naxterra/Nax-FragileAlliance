@@ -21,6 +21,8 @@ struct WindowOptions {
     std::filesystem::path shots;     // where F12 saves screenshots of the game picture
     std::filesystem::path ai_model;  // the AI upscaling model without extension, see Presenter::init
     double shot_after = 0;           // with a value above 0, one screenshot is saved after that many seconds
+    double stop_after = 0;           // bounded verification run; zero means normal play
+    bool hidden = false;            // render without showing or focusing a desktop window
 };
 
 // Runs the window until the user closes it or finished becomes true. Must be called on the main thread.

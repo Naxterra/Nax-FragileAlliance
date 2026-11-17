@@ -17,6 +17,7 @@ const ProgramInfo* translated_program();
 }
 
 namespace {
+bool quiet_errors = false;
 
 std::filesystem::path executable_folder() {
     wchar_t path[MAX_PATH];
@@ -50,6 +51,7 @@ bool is_game_folder(const std::filesystem::path& folder) {
 
 void report(const std::string& text) {
     std::fprintf(stderr, "%s\n", text.c_str());
+    if (quiet_errors) return;
     const std::wstring wide(text.begin(), text.end());
     MessageBoxW(nullptr, wide.c_str(), L"Fragile Allegiance", MB_OK | MB_ICONERROR);
 }
@@ -68,7 +70,7 @@ DWORD WINAPI game_thread(void* parameter) {
 }
 
 int read_filter(const std::filesystem::path& settings, bool* fullscreen, bool* textures) {
-    int filter = nax::Presenter::kAiFilter;  // AI upscaling unless the player chose another filter
+    int filter = 0;  // preserve the original picture unless the player chooses another filter
     if (FILE* f = _wfopen(settings.c_str(), L"r")) {
         char line[64];
         while (std::fgets(line, sizeof line, f)) {
@@ -82,6 +84,23 @@ int read_filter(const std::filesystem::path& settings, bool* fullscreen, bool* t
     return filter < 0 ? 0 : filter;
 }
 
+bool inside_game(const std::filesystem::path& candidate, const std::filesystem::path& game) {
+    const auto root = std::filesystem::weakly_canonical(game);
+    const auto resolved = std::filesystem::weakly_canonical(candidate);
+    auto prefix = root.native();
+    if (!prefix.empty() && prefix.back() != L'\\') prefix += L'\\';
+    const auto text = resolved.native();
+    if (text.size() >= prefix.size() && CompareStringOrdinal(text.data(), int(prefix.size()), prefix.data(), int(prefix.size()), TRUE) == CSTR_EQUAL) return true;
+    for (auto p = resolved; !p.empty();) {
+        std::error_code error;
+        if (std::filesystem::equivalent(p, root, error) && !error) return true;
+        const auto parent = p.parent_path();
+        if (parent == p) break;
+        p = parent;
+    }
+    return false;
+}
+
 }  // namespace
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
@@ -92,13 +111,16 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     }
     int argc = 0;
     wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-    std::filesystem::path data;
+    std::filesystem::path data, profile;
     std::string arguments;
-    bool fullscreen = false, windowed = false, dump_textures = false;
-    double shot_after = 0;
+    bool fullscreen = false, windowed = false, dump_textures = false, hidden = false;
+    double shot_after = 0, stop_after = 0;
     for (int i = 1; i < argc; i++) {
         const std::wstring arg = argv[i];
         if (arg == L"--data" && i + 1 < argc) data = argv[++i];
+        else if (arg == L"--user-dir" && i + 1 < argc) profile = std::filesystem::absolute(argv[++i]);
+        else if (arg == L"--hidden") hidden = true;
+        else if (arg == L"--run-seconds" && i + 1 < argc) stop_after = _wtof(argv[++i]);
         else if (arg == L"--fullscreen") fullscreen = true;
         else if (arg == L"--window") windowed = true;
         else if (arg == L"--dump-textures") dump_textures = true;
@@ -109,6 +131,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         }
     }
     LocalFree(argv);
+    quiet_errors = hidden;
     if (data.empty()) data = gog_folder();
     if (!is_game_folder(data)) {
         report("The Fragile Allegiance folder was not found. Pass --data <folder with FRAGILE.EXE>.");
@@ -118,6 +141,11 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     static nax::Game game;
     game.data_dir = data;
     game.user_dir = user_folder();
+    if (!profile.empty()) {
+        if (inside_game(profile, data)) { report("The user folder must be outside the original game installation."); return 2; }
+        game.user_dir = profile;
+        std::filesystem::create_directories(game.user_dir);
+    }
     game.arguments = arguments;
     game.set_log(game.user_dir / L"runtime.log");
     // Enhanced textures come from the pack folder; --dump-textures saves the originals for making a pack.
@@ -142,6 +170,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     options.settings = game.user_dir / L"settings.txt";
     options.shots = game.user_dir / L"shots";
     options.shot_after = shot_after;
+    options.stop_after = stop_after;
+    options.hidden = hidden;
     bool remembered_fullscreen = false;
     options.filter = read_filter(options.settings, &remembered_fullscreen, &options.textures);
     // The AI filter uses the compact model that Upscayl installs; it is read from there and never copied.
@@ -158,8 +188,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         return 4;
     }
     std::string error;
-    if (!nax::run_window(game.display, options, run.finished, &error)) {
+    const bool window_ok = nax::run_window(game.display, options, run.finished, &error);
+    if (!window_ok) {
         game.display.quit = true;
+        game.log("%s", error.c_str());
         report(error);
     }
     // The window closed or the game ended. The game thread stops at its next poll.
@@ -173,5 +205,5 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         report(game.failure());
         return 1;
     }
-    return run.code;
+    return window_ok ? run.code : 5;
 }
