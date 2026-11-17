@@ -37,6 +37,7 @@ public:
     ~TexturePack();
     // pack holds <key>.png (any size, margin included) with an optional <key>.pal (768 bytes, the palette it
     // was made under); dump receives the originals in the same form when dumping is on.
+    // Legacy files marked in pack/redrawn are ignored until faithful rebuilding removes the marker.
     void open(const std::filesystem::path& pack, const std::filesystem::path& dump, bool dumping);
     // True when there is a pack folder or dumping is on. A pack folder made while the game runs is noticed
     // within a few seconds; without one, the game does no texture work at all.

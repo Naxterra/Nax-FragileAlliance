@@ -178,6 +178,31 @@ int picture_added_to_the_pack_later_is_picked_up(const fs::path& folder) {
     return failures;
 }
 
+int legacy_repaint_is_ignored_until_faithful_rebuild(const fs::path& folder) {
+    const uint64_t key = key_of(7);
+    fs::create_directories(folder / "pack" / "redrawn");
+    const fs::path marker = folder / "pack" / "redrawn" / texture_name(key);
+    FILE* flag = _wfopen(marker.c_str(), L"wb");
+    check(flag != nullptr, "the legacy repaint marker is created");
+    if (flag) std::fclose(flag);
+    std::vector<uint32_t> big(80 * 76, 0xFF00FF00u);
+    check(save_png(folder / "pack" / (texture_name(key) + L".png"), big.data(), 80, 76), "the old repaint is present");
+    TexturePack pack;
+    pack.open(folder / "pack", folder / "dump", false);
+    pack.set_search_interval(std::chrono::milliseconds(0));
+    Palette palette;
+    int decoded = 0;
+    auto decode = [&](GameImage* image) { ++decoded; *image = sample_image(); return true; };
+    check(pack.get(key, decode, palette.c, true) == nullptr, "an unreviewed legacy repaint is not loaded");
+    pack.wait();
+    check(pack.get(key, decode, palette.c, true) == nullptr && decoded == 0, "it does not enter the decoding queue");
+    fs::remove(marker);
+    pack.get(key, decode, palette.c, true);
+    pack.wait();
+    check(pack.get(key, decode, palette.c, true) != nullptr, "a faithfully rebuilt texture is picked up after its marker is retired");
+    return failures;
+}
+
 int without_a_pack_folder_nothing_is_created_or_done(const fs::path& folder) {
     TexturePack pack;
     pack.open(folder / "pack", folder / "dump", false);
@@ -205,6 +230,7 @@ int main(int argc, char** argv) {
         {"broken_pack_picture_leaves_the_original", broken_pack_picture_leaves_the_original},
         {"picture_added_to_the_pack_later_is_picked_up", picture_added_to_the_pack_later_is_picked_up},
         {"without_a_pack_folder_nothing_is_created_or_done", without_a_pack_folder_nothing_is_created_or_done},
+        {"legacy_repaint_is_ignored_until_faithful_rebuild", legacy_repaint_is_ignored_until_faithful_rebuild},
     };
     for (const auto& c : cases)
         if (name == c.name) return c.run(folder);
