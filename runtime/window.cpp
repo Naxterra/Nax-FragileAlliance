@@ -66,7 +66,7 @@ bool save_bmp(const std::filesystem::path& file, const uint32_t* rgba, uint32_t 
 
 bool g_shot_requested = false;
 
-const wchar_t* const kFilterNames[Presenter::kFilterCount] = {L"sharp pixels", L"smooth edges", L"CRT", L"AI upscaling"};
+const wchar_t* const kFilterNames[Presenter::kFilterCount] = {L"sharp pixels", L"smooth edges", L"CRT", L"neural frame filter"};
 
 void update_title(HWND hwnd) {
     std::wstring filter = kFilterNames[g_state->filter];

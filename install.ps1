@@ -11,9 +11,18 @@ if(-not $GameFolder) {
 }
 if(-not $GameFolder -or -not(Test-Path -LiteralPath (Join-Path $GameFolder 'FRAGILE.EXE'))) { throw 'Pass -GameFolder pointing to the owned original game.' }
 $game=(Resolve-Path -LiteralPath $GameFolder).Path
-$destination=Join-Path $env:LOCALAPPDATA 'Programs\Nax Fragile Allegiance\enhanced'
+$installRoot=Join-Path $env:LOCALAPPDATA 'Programs\Nax Fragile Allegiance\enhanced'
+$destination=$installRoot
 $installed=Join-Path $destination 'FragileAllegiance.exe'
-if(Get-CimInstance Win32_Process -Filter "Name='FragileAllegiance.exe'" | Where-Object ExecutablePath -eq $installed) { throw 'Close the installed enhanced game before updating it.' }
+$running=@(Get-CimInstance Win32_Process -Filter "Name='FragileAllegiance.exe'")
+if($running | Where-Object ExecutablePath -eq $installed) {
+    # Keep an open game and its files intact. The shortcut selects the new build
+    # on the next launch; save files remain in the same per-user profile.
+    $version=(Get-FileHash -LiteralPath (Join-Path $build 'FragileAllegiance.exe') -Algorithm SHA256).Hash.Substring(0,12).ToLowerInvariant()
+    $destination=Join-Path $installRoot ('versions\'+$version)
+    $installed=Join-Path $destination 'FragileAllegiance.exe'
+}
+if($running | Where-Object ExecutablePath -eq $installed) { throw 'The same version is already open. Close it before reinstalling that version.' }
 New-Item -ItemType Directory -Force -Path $destination | Out-Null
 foreach($name in @('FragileAllegiance.exe','image.bin')) {
     $target=Join-Path $destination $name
@@ -24,7 +33,12 @@ Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'LICENSE'),(Join-Path $PSScriptR
 $shortcutPath=Join-Path ([Environment]::GetFolderPath('Programs')) 'Fragile Allegiance Enhanced.lnk'
 $shell=New-Object -ComObject WScript.Shell
 $shortcut=$shell.CreateShortcut($shortcutPath)
-if((Test-Path -LiteralPath $shortcutPath) -and $shortcut.TargetPath -ne $installed) { throw 'A different application already uses that Start menu shortcut.' }
+if((Test-Path -LiteralPath $shortcutPath) -and $shortcut.TargetPath -ne $installed) {
+    $previous=[IO.Path]::GetFullPath($shortcut.TargetPath)
+    $root=[IO.Path]::GetFullPath($installRoot).TrimEnd('\')+'\'
+    if(-not $previous.StartsWith($root,[StringComparison]::OrdinalIgnoreCase) -or
+       [IO.Path]::GetFileName($previous) -ne 'FragileAllegiance.exe') { throw 'A different application already uses that Start menu shortcut.' }
+}
 $shortcut.TargetPath=$installed
 $shortcut.Arguments='--data "'+$game+'"'
 $shortcut.WorkingDirectory=$destination

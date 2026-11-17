@@ -42,6 +42,7 @@ class PresenterTests(unittest.TestCase):
     def test_fractional_scaled_position(self): self.run_case("fractional_scale")
     def test_transparent_hole(self): self.run_case("transparent_hole")
     def test_reload_keeps_previous_texture_until_upload(self): self.run_case("reload_budget")
+    def test_neural_computed_and_cached_frames_are_both_presented(self): self.run_case("neural_presentation")
 
 
 if __name__ == "__main__":

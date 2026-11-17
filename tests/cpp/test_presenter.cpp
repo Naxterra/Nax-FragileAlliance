@@ -24,7 +24,7 @@ struct Fixture {
     std::vector<nax::Overlay> overlays;
     int number = 0;
 
-    explicit Fixture(const fs::path& path, int captures = 1) : folder(fs::absolute(path)) {
+    explicit Fixture(const fs::path& path, int captures = 1, bool neural = false) : folder(fs::absolute(path)) {
         fs::create_directories(folder);
         SetEnvironmentVariableW(L"NAX_CAPTURE_DIR", folder.c_str());
         std::ofstream(folder / "capture.txt") << captures;
@@ -40,7 +40,27 @@ struct Fixture {
         if (!window) throw std::runtime_error("Creating the hidden test window failed");
         presenter = std::make_unique<nax::Presenter>();
         std::string error;
-        if (!presenter->init(window, {}, &error)) throw std::runtime_error(error);
+        fs::path model;
+        if (neural) {
+            // Two zero convolutions leave only the network's nearest-neighbour
+            // residual. This exercises compute-to-graphics presentation without
+            // requiring installed models or hiding failures behind learned detail.
+            model = folder / "identity";
+            std::ofstream param(folder / "identity.param");
+            param << "7767517\n4 4\nInput input 0 1 data\n"
+                  << "Convolution first 1 1 data a 0=64 1=3 5=1 6=1728\n"
+                  << "PReLU prelu 1 1 a b 0=64\n"
+                  << "Convolution last 1 1 b out 0=48 1=3 5=1 6=27648\n";
+            std::ofstream bin(folder / "identity.bin", std::ios::binary);
+            const uint32_t tag = 0;
+            for (size_t count : {size_t(1728 + 64 + 64), size_t(27648 + 48)}) {
+                bin.write(reinterpret_cast<const char*>(&tag), sizeof tag);
+                const std::vector<float> zeros(count, 0);
+                bin.write(reinterpret_cast<const char*>(zeros.data()), std::streamsize(count * sizeof(float)));
+            }
+        }
+        if (!presenter->init(window, model, &error)) throw std::runtime_error(error);
+        if (neural && !presenter->ai_available()) throw std::runtime_error(presenter->ai_problem());
         for (auto& c : palette) c = 0xFF000000u;
         palette[1] = 0xFFFFFFFFu;
         palette[2] = 0xFFFF0000u;
@@ -63,8 +83,8 @@ struct Fixture {
         for (int row = y; row < y + h; ++row)
             for (int col = x; col < x + w; ++col) frame[size_t(row) * 64 + col] = colour;
     }
-    uint32_t capture(int x = 16, int y = 16) {
-        presenter->draw(frame.data(), 64, 48, 0, palette, overlays);
+    uint32_t capture(int x = 16, int y = 16, int filter = 0) {
+        presenter->draw(frame.data(), 64, 48, filter, palette, overlays);
         wchar_t name[32];
         swprintf(name, 32, L"frame-%05d.png", number++);
         std::vector<uint32_t> output;
@@ -79,7 +99,18 @@ int main(int argc, char** argv) {
     if (argc != 3) return 2;
     const std::string name = argv[1];
     try {
-        Fixture f(argv[2], name == "reload_budget" || name == "palette_animation" ? 3 : 1);
+        const bool neural = name == "neural_presentation";
+        Fixture f(argv[2], neural || name == "reload_budget" || name == "palette_animation" ? 3 : 1, neural);
+        if (neural) {
+            f.overlays.clear();
+            f.frame.assign(64 * 48, 0xFF506070u);
+            const uint32_t computed = f.capture(16, 16, nax::Presenter::kAiFilter);
+            const uint32_t cached = f.capture(16, 16, nax::Presenter::kAiFilter);
+            f.frame[0] = 0xFFFFFFFFu;  // dispatch compute again while this pixel stays unchanged
+            const uint32_t changed = f.capture(16, 16, nax::Presenter::kAiFilter);
+            std::printf("neural presentation: computed %08x, cached %08x, changed %08x\n", computed, cached, changed);
+            return computed == 0xFF506070u && cached == computed && changed == computed ? 0 : 1;
+        }
         uint32_t expected = 0xFF00FF00u;
         if (name == "black_fade" || name == "half_fade" || name == "palette_animation") {
             for (int c = 0; c < 3; ++c) f.texture->reference[1][c] = 8;

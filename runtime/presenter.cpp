@@ -805,6 +805,9 @@ void Presenter::draw(const uint32_t* rgba, uint32_t width, uint32_t height, int 
     D3D12_RECT scissor{0, 0, LONG(width_), LONG(height_)};
     list_->RSSetViewports(1, &vp);
     list_->RSSetScissorRects(1, &scissor);
+    // Neural inference binds a compute pipeline. Every frame must restore the
+    // graphics pipeline, including frames that dispatched only a small update.
+    list_->SetPipelineState(pso_.Get());
     list_->SetGraphicsRootSignature(root_.Get());
     ID3D12DescriptorHeap* heaps[] = {srv_heap_.Get()};
     list_->SetDescriptorHeaps(1, heaps);
